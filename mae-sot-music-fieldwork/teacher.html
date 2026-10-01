@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>หน้าครู — ดนตรีแม่สอด</title>
+<meta name="robots" content="noindex,nofollow">
+<meta name="author" content="นนทพัทธ์ วงค์มูล">
+<meta name="theme-color" content="#2e1065">
+<link rel="icon" href="icons/favicon-32.png">
+<link rel="stylesheet" href="style.css">
+<style>
+  .t-wrap { max-width: 1240px; margin: 0 auto; padding: 14px; }
+  .ttabs { overflow-x: auto; position: sticky; top: 62px; z-index: 10; }
+  .ttabs button { white-space: nowrap; }
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 12px; }
+  .toolbar .f { margin: 0; min-width: 150px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .stat { background: #fff; border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; box-shadow: var(--sh); }
+  .stat b { display: block; font-family: var(--head); font-size: 1.7rem; color: var(--p600); } .stat span { color: var(--mut); font-size: .84rem; }
+  .stat.gold { background: linear-gradient(135deg, var(--g50), #fff); } .stat.gold b { color: var(--g700); }
+  .tbl-box { overflow: auto; background: #fff; border: 1px solid var(--line); border-radius: 12px; max-height: 68vh; }
+  table.t { border-collapse: collapse; width: 100%; font-size: .88rem; }
+  table.t th, table.t td { border-bottom: 1px solid var(--line); padding: 7px 8px; text-align: center; white-space: nowrap; }
+  table.t th { position: sticky; top: 0; background: var(--p50); color: var(--p600); z-index: 2; font-size: .76rem; }
+  table.t td.l, table.t th.l { text-align: left; }
+  table.t tr:hover td { background: var(--g50); }
+  .flagdot { color: var(--ok); font-weight: 700; }
+  .gl { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  @media (min-width: 980px) { .gl { grid-template-columns: 380px 1fr; align-items: start; } .gl > .card { position: sticky; top: 120px; } }
+  .gcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+  .gcard { background: #fff; border: 1px solid var(--line); border-top: 4px solid var(--g400); border-radius: var(--r); padding: 12px; box-shadow: var(--sh); }
+  .schips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .schip { border: 1.5px solid var(--line); background: #fff; border-radius: 10px; padding: 6px 10px; cursor: pointer; font-size: .86rem; text-align: left; }
+  .schip b { color: var(--p600); margin-right: 2px; }
+  .schip.on { background: linear-gradient(180deg, var(--g300), var(--g500)); border-color: var(--g500); color: var(--p900); }
+  .cal-l { display: grid; grid-template-columns: 1fr; gap: 16px; }
+  @media (min-width: 980px) { .cal-l { grid-template-columns: 420px 1fr; align-items: start; } }
+  .detail { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  @media (min-width: 1020px) { .detail { grid-template-columns: 1.35fr 1fr; align-items: start; } .grade-panel { position: sticky; top: 120px; max-height: calc(100vh - 130px); overflow: auto; } }
+  .tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 8px; }
+  .tabs button { flex: none; border: 1.5px solid var(--line); background: #fff; border-radius: 99px; padding: 6px 12px; cursor: pointer; }
+  .tabs button.on { background: var(--p600); color: #fff; border-color: var(--p600); }
+  .rub { display: flex; gap: 6px; }
+  .rub button { flex: 1; min-height: 44px; border: 1.5px solid var(--line); background: #fff; border-radius: 10px; cursor: pointer; font-size: .74rem; line-height: 1.15; }
+  .rub button b { display: block; font-size: 1.1rem; }
+  .rub button.on { background: linear-gradient(180deg, var(--g300), var(--g500)); border-color: var(--g500); color: var(--p900); }
+  .big-score { font-family: var(--head); font-size: 2rem; font-weight: 700; color: var(--p600); }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .lb { position: fixed; inset: 0; background: rgba(30,11,61,.9); z-index: 80; display: grid; place-items: center; }
+  .lb img { max-width: 96vw; max-height: 92vh; border-radius: 8px; }
+  .thumbs img { cursor: zoom-in; }
+  #toast { bottom: 30px; }
+</style>
+</head>
+<body>
+<div id="root"><div class="empty" style="padding-top:30vh">กำลังโหลด…</div></div>
+<script src="config.js"></script>
+<script src="core.js"></script>
+<script src="backend.js"></script>
+<script src="teacher.js"></script>
+</body>
+</html>
