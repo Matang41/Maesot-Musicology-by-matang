@@ -70,7 +70,7 @@
   async function onAuth(u) {
     clearSubs(); D = blankD(); USER = u; ME = null; GID = null; CUR = null;
     if (!u) { renderLogin(); return; }
-    if (B.isTeacher(u.email)) { renderBlocked('บัญชีนี้เป็นบัญชีครู', 'กรุณาใช้หน้าครูเพื่อจัดการกลุ่มและตรวจงาน', '<a class="btn gold block" href="teacher.html">ไปหน้าครู</a>'); return; }
+    if (B.isTeacher(u.email)) { teacherEntry(u); return; }
     const sid = B.sidFromEmail(u.email);
     if (!sid) { renderBlocked('ใช้ได้เฉพาะบัญชีนักเรียน @' + C.auth.domain, 'บัญชี ' + u.email + ' ไม่ใช่อีเมลนักเรียนของโรงเรียน (รูปแบบ รหัสนักเรียน@' + C.auth.domain + ')'); return; }
     $('#root').innerHTML = '<div class="empty" style="padding-top:30vh">กำลังโหลดข้อมูล…</div>';
@@ -86,6 +86,40 @@
     ]);
     D.ready = true; render();
   }
+
+  /* ---------- ครู: ศูนย์กลาง (hub) + มุมมองนักเรียน ---------- */
+  let HUBG = {};
+  async function teacherEntry(u) {
+    $('#root').innerHTML = '<div class="empty" style="padding-top:30vh">กำลังโหลด…</div>';
+    await first('groups', v => { HUBG = v || {}; if (!ME && route().a === 'hub') renderHub(u); }, () => { });
+    const as = sessionStorage.getItem('mcm5_viewas');
+    if (as && HUBG[as]) return teacherAsGroup(u, as);
+    sessionStorage.removeItem('mcm5_viewas'); if (route().a !== 'hub') location.hash = '#/hub'; renderHub(u);
+  }
+  function renderHub(u) {
+    u = u || USER; const demo = B.mode === 'demo';
+    const gs = Object.keys(HUBG).map(id => Object.assign({ id }, HUBG[id])).sort((a, b) => (a.room + a.name).localeCompare(b.room + b.name, 'th', { numeric: true }));
+    const byRoom = {}; gs.forEach(g => (byRoom[g.room] = byRoom[g.room] || []).push(g));
+    $('#root').innerHTML = '<div class="hero small"><div class="logos"><img class="big" src="icons/logo-full.png" alt=""></div><h1>ศูนย์กลาง · ' + esc(C.appName) + '</h1><p>สวัสดี ' + esc(u.name || u.email) + ' · ' + esc(u.email) + '</p></div>' +
+      '<div class="hub">' + (demo ? '<div class="demo-strip">🧪 กำลังใช้ <b>โหมดทดลอง</b> (ข้อมูลสาธิต ไม่กระทบข้อมูลจริง)' + (B.realConfigured() ? ' · <a href="index.html?demo=0">กลับไปข้อมูลจริง</a>' : '') + '</div>' : '') +
+      '<div class="hub-grid">' +
+      '<a class="hub-btn gold" href="teacher.html' + (demo ? '' : '') + '"><span>🧑‍🏫</span><b>แผงควบคุมครู</b><small>นำเข้ารายชื่อ · จัดกลุ่ม · ปฏิทิน · ตรวจงาน · ส่งออกคะแนน · สำรองข้อมูล</small></a>' +
+      '<button class="hub-btn" data-act="hubview"><span>👀</span><b>ดูแอปในมุมมองนักเรียน</b><small>เลือกกลุ่ม แล้วเห็นหน้าจอเหมือนที่นักเรียนเห็น (ข้อมูลจริง อ่านอย่างเดียว)</small></button>' +
+      (demo ? '<button class="hub-btn" data-act="demoas"><span>🧪</span><b>ทดลองเป็นนักเรียน</b><small>สลับเป็นบัญชีนักเรียนสาธิต แล้วลองบันทึก แนบรูป ส่งงานได้เต็มรูปแบบ</small></button>'
+        : '<a class="hub-btn" href="index.html?demo=1"><span>🧪</span><b>ทดลองระบบนักเรียน</b><small>ใช้ข้อมูลสาธิต ลองบันทึก แนบรูป ส่งงานได้เต็มรูปแบบ ไม่กระทบข้อมูลจริง</small></a>') +
+      '<a class="hub-btn" href="teacher.html?demo=1"><span>🧰</span><b>ทดลองแผงครู (ข้อมูลสาธิต)</b><small>ฝึกจัดกลุ่ม ให้คะแนน ส่งออก โดยไม่แตะข้อมูลจริง</small></a>' +
+      '</div><div class="card" id="hubGroups"' + (route().b === 'groups' ? '' : ' hidden') + '><div class="card-title">👀 เลือกกลุ่มที่จะดู</div>' +
+      (gs.length ? Object.keys(byRoom).sort((a, b) => a.localeCompare(b, 'th', { numeric: true })).map(r => '<div class="muted" style="margin:8px 0 4px">ม.' + esc(r) + '</div><div class="row wrap">' + byRoom[r].map(g => '<button class="btn sm sec" data-act="viewas" data-id="' + esc(g.id) + '">' + esc(g.name) + ' (' + Object.keys(g.members || {}).length + ')</button>').join('') + '</div>').join('') : '<div class="muted">ยังไม่มีกลุ่ม — ไปที่แผงควบคุมครู → รายชื่อ & จัดกลุ่ม</div>') + '</div>' +
+      '<button class="btn sec block" data-act="logout">ออกจากระบบ</button></div>' + M.copyrightHTML();
+  }
+  async function teacherAsGroup(u, gid) {
+    const g = HUBG[gid]; sessionStorage.setItem('mcm5_viewas', gid);
+    ME = { sid: 'teacher', name: 'ครู (' + (u.name || u.email) + ')', room: g.room, no: '-', email: u.email, teacher: true };
+    D.personal = {};
+    await Promise.all([first('calendar', v => { D.calendar = v || {}; }, () => { }), first('config', v => { D.config = v || {}; }, () => { })]);
+    subGroup(gid); D.ready = true; if (route().a === 'hub') location.hash = '#/home'; render();
+  }
+  const WRITE_ACTS = ['new', 'delrec', 'restore', 'delmedia', 'gps', 'clearsign', 'assign', 'flag', 'roles', 'propose', 'pick', 'rec'];
 
   /* ---------- การเขียนข้อมูล ---------- */
   const lastHist = {};
@@ -108,7 +142,7 @@
   }
   const PEND = {};
   function queueField(k, v) {
-    if (!CUR) return; const key = CUR.path; const p = PEND[key] = PEND[key] || { cur: Object.assign({}, CUR), f: {} }; p.f[k] = v;
+    if (!CUR || (ME && ME.teacher)) return; const key = CUR.path; const p = PEND[key] = PEND[key] || { cur: Object.assign({}, CUR), f: {} }; p.f[k] = v;
     clearTimeout(p.t); p.t = setTimeout(() => flushKey(key), 500);
   }
   function flushKey(key) {
@@ -158,7 +192,10 @@
     o = o || {}; const [bc, bt] = badge(); const cur = NAVMAP[route().a];
     const pendProp = myEvents().filter(e => e.date >= today()).length;
     return '<div class="app"><header class="topbar">' + (o.back ? '<button class="back" data-go="' + o.back + '" aria-label="กลับ">‹</button>' : '<img class="logo" src="icons/logo-mark-512.png" alt="">') +
-      '<h1>' + esc(title) + '</h1><button class="sync ' + bc + '" data-act="safety">' + bt + '</button></header><main>' + inner + M.copyrightHTML() + '</main></div>' +
+      '<h1>' + esc(title) + '</h1><button class="sync ' + bc + '" data-act="safety">' + bt + '</button></header>' +
+      (ME && ME.teacher ? '<div class="viewas">👀 มุมมองครู · ' + esc((D.group || {}).name || '') + ' (อ่านอย่างเดียว)<button class="btn xs gold" data-act="hubview">เปลี่ยนกลุ่ม</button><button class="btn xs sec" data-act="hub">ศูนย์กลาง</button></div>' : '') +
+      (B.mode === 'demo' ? '<div class="demo-strip">🧪 โหมดทดลอง (ข้อมูลสาธิต)' + (B.realConfigured() ? ' · <a href="index.html?demo=0">ออกไปข้อมูลจริง</a>' : '') + ' · <a href="#" data-act="switchacct">สลับบัญชี</a></div>' : '') +
+      '<main>' + inner + M.copyrightHTML() + '</main></div>' +
       '<nav class="nav"><div class="nav-in">' + NAV.map(n => '<a href="#/' + n[0] + '" class="' + (cur === n[0] ? 'on' : '') + '"><span>' + n[1] + '</span>' + n[2] + (n[0] === 'calendar' && pendProp ? '<b class="dot">' + pendProp + '</b>' : '') + '</a>').join('') + '</div></nav>' + (o.extra || '');
   }
   const seg = (items, cur) => '<div class="seg">' + items.map(i => '<a href="#/' + i[0] + '" class="' + (i[0] === cur ? 'on' : '') + '">' + i[1] + '</a>').join('') + '</div>';
@@ -171,9 +208,10 @@
   function renderLogin() {
     const err = B.authError ? '<div class="warn-box">' + esc(B.authError.message || B.authError.code) + '</div>' : '';
     $('#root').innerHTML = '<div class="hero"><div class="logos"><img class="big" src="icons/logo-full.png" alt="Mae Sot Musicology"></div><h1>' + esc(C.appFull) + '</h1><p>' + esc(C.course.code) + ' ' + esc(C.course.name) + ' · ' + esc(C.course.school) + '</p></div>' +
-      '<div class="card login-card">' + err + '<button class="gbtn" data-act="login">' + GSVG + 'เข้าสู่ระบบด้วยบัญชี @' + esc(C.auth.domain) + '</button>' +
-      '<ol class="steps"><li>ใช้อีเมลโรงเรียน <b>รหัสนักเรียน@' + esc(C.auth.domain) + '</b> เท่านั้น</li><li>ระบบผูกบัญชีกับรายชื่อที่ครูนำเข้า — ใช้บัญชีเพื่อนแทนไม่ได้ และทุกการบันทึกจะแสดงชื่อผู้บันทึก</li><li>ครูจัดกลุ่มให้ แล้วสมาชิกบันทึกข้อมูลร่วมกันได้ทันที</li></ol>' +
-      (B.mode === 'demo' ? '<div class="tip" style="margin-top:12px">🧪 <b>โหมดสาธิต</b> — ยังไม่ได้เชื่อม Firebase ข้อมูลอยู่ในเบราว์เซอร์นี้เท่านั้น เปิดหลายแท็บเพื่อจำลองสมาชิกหลายคน และเปิด <a href="teacher.html">หน้าครู</a> ได้</div>' : '') +
+      '<div class="card login-card">' + err + '<button class="gbtn" data-act="login">' + GSVG + 'เข้าสู่ระบบด้วย Google</button>' +
+      '<div class="muted" style="text-align:center;margin-top:6px">ระบบพาไปหน้าที่ถูกต้องให้อัตโนมัติ — นักเรียน → แอปของกลุ่ม · ครู → ศูนย์กลาง</div>' +
+      '<ol class="steps"><li>นักเรียนใช้อีเมลโรงเรียน <b>รหัสนักเรียน@' + esc(C.auth.domain) + '</b></li><li>ระบบผูกบัญชีกับรายชื่อที่ครูนำเข้า — ใช้บัญชีเพื่อนแทนไม่ได้ และทุกการบันทึกจะแสดงชื่อผู้บันทึก</li><li>ครูจัดกลุ่มให้ แล้วสมาชิกบันทึกข้อมูลร่วมกันได้ทันที</li></ol>' +
+      (B.mode === 'demo' ? '<div class="tip" style="margin-top:12px">🧪 <b>โหมดทดลอง</b> — ข้อมูลสาธิตอยู่ในเบราว์เซอร์นี้เท่านั้น เลือกเป็นครูหรือนักเรียนก็ได้ เปิดหลายแท็บเพื่อจำลองสมาชิกหลายคน' + (B.realConfigured() ? ' · <a href="index.html?demo=0">กลับไปข้อมูลจริง</a>' : '') + '</div>' : '<div style="text-align:center;margin-top:12px"><a class="btn sm ghost" href="index.html?demo=1">🧪 ทดลองใช้ด้วยข้อมูลสาธิต (ไม่ต้องล็อกอินจริง)</a></div>') +
       '</div>' + M.copyrightHTML();
   }
   function renderBlocked(title, msg, extra) {
@@ -295,7 +333,7 @@
     }
     return '';
   }
-  function formBody(kind, rec, single) { return '<div data-form>' + FORMS[kind].fields.map(f => fieldHTML(f, rec, single)).join('') + dlHTML(rec) + '</div>'; }
+  function formBody(kind, rec, single) { return (ME && ME.teacher ? '<fieldset disabled class="ro">' : '<fieldset class="ro">') + '<div data-form>' + FORMS[kind].fields.map(f => fieldHTML(f, rec, single)).join('') + dlHTML(rec) + '</div>'; }
   function viewForm(kind, rid) {
     if (!GID) return viewNoGroup();
     const F = FORMS[kind]; const rec = getRec(kind, rid);
@@ -375,7 +413,8 @@
   async function render(keep) {
     if (!ME) return; flushAll();
     const { a, b } = route(); CUR = null; let html;
-    if (a === 'home') html = viewHome();
+    if (a === 'hub') { if (ME && ME.teacher) { location.hash = '#/home'; return; } html = viewHome(); }
+    else if (a === 'home') html = viewHome();
     else if (a === 'synth') html = viewSynth();
     else if (a === 'calendar') html = viewCalendar();
     else if (a === 'trash') html = viewTrash();
@@ -437,6 +476,7 @@
   });
   document.addEventListener('click', async e => {
     const go = e.target.closest('[data-go]'); if (go) { flushAll(); location.hash = go.dataset.go; return; }
+    const wa = e.target.closest('[data-act]'); if (ME && ME.teacher && (e.target.closest('[data-peer]') || (wa && WRITE_ACTS.includes(wa.dataset.act)))) { toast('มุมมองครูเป็นแบบอ่านอย่างเดียว — ลองแก้ไขได้ใน “ทดลองระบบนักเรียน”', 3500); return; }
     const ch = e.target.closest('[data-chip]'); if (ch && CUR) { const k = ch.dataset.chip, v = ch.dataset.v; const arr = (curData()[k] || []).slice(); const i = arr.indexOf(v); if (i >= 0) arr.splice(i, 1); else arr.push(v); ch.classList.toggle('on', i < 0); queueField(k, arr); return; }
     const sc = e.target.closest('[data-scale]'); if (sc && CUR) { const k = sc.dataset.scale, v = +sc.dataset.v; const nv = curData()[k] === v ? '' : v; $$('[data-scale="' + k + '"]').forEach(b => b.classList.toggle('on', +b.dataset.v === nv)); queueField(k, nv); return; }
     const pr = e.target.closest('[data-peer]'); if (pr) { const v = +pr.dataset.v; $$('[data-peer="' + pr.dataset.peer + '"]').forEach(b => b.classList.toggle('on', b === pr)); W(B.update('personal/' + ME.sid + '/peer/' + pr.dataset.peer, { score: v, at: Date.now() })); return; }
@@ -480,8 +520,13 @@
   }
 
   const ACTIONS = {
-    login: async () => { try { B.authError = null; await B.signIn({ hd: C.auth.domain }); } catch (er) { B.authError = er; renderLogin(); } },
-    logout: async () => { flushAll(); await B.signOut(); location.hash = '#/home'; },
+    login: async () => { try { B.authError = null; await B.signIn({}); } catch (er) { B.authError = er; renderLogin(); } },
+    logout: async () => { flushAll(); sessionStorage.removeItem('mcm5_viewas'); await B.signOut(); location.hash = '#/home'; },
+    hub: () => { sessionStorage.removeItem('mcm5_viewas'); location.hash = '#/hub'; onAuth(USER); },
+    hubview: () => { sessionStorage.removeItem('mcm5_viewas'); location.hash = '#/hub/groups'; onAuth(USER); },
+    viewas: bt => { clearSubs(); D = blankD(); ME = null; teacherAsGroup(USER, bt.dataset.id).then(() => { subs.push(B.on('groups', v => { HUBG = v || {}; }, () => { })); }); },
+    demoas: async () => { await B.signOut(); sessionStorage.removeItem('mcm5_viewas'); setTimeout(() => B.signIn({}), 100); },
+    switchacct: async () => { sessionStorage.removeItem('mcm5_viewas'); await B.signOut(); setTimeout(() => B.signIn({}), 100); },
     new: bt => newRecord(bt.dataset.kind),
     delrec: () => {
       if (!CUR || !confirm('ย้ายรายการนี้ไปถังขยะ? (สมาชิกกู้คืนได้)')) return; const { kind, rid, path } = CUR; const now = Date.now();
@@ -546,6 +591,7 @@
   window.addEventListener('pagehide', flushAll);
   document.addEventListener('visibilitychange', () => { if (document.hidden) flushAll(); });
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
+  (function () { try { const q = new URLSearchParams(location.search); if (q.get('as')) { sessionStorage.setItem('mcm5_viewas', q.get('as')); history.replaceState(null, '', location.pathname + '#/home'); } } catch (e) { /* ignore */ } })();
   (async function boot() {
     try { await B.init(); } catch (er) { $('#root').innerHTML = '<div class="card" style="margin:20px">เชื่อมต่อระบบไม่สำเร็จ: ' + esc(er.message) + '<br>ตรวจอินเทอร์เน็ต แล้วลองเปิดใหม่</div>'; return; }
     B.onStatus(s => { STATUS = s; setBadge(); });

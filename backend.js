@@ -131,8 +131,8 @@
     return new Promise(res => {
       const t = DemoImpl.tree(); const ro = t.roster || {};
       const w = document.createElement('div'); w.className = 'modal'; w.style.alignItems = 'center';
-      const list = teacher ? [{ email: C.teacherEmails[0] || 'teacher@' + C.auth.domain, name: 'ครูตังค์ (สาธิต)' }]
-        : Object.keys(ro).sort().map(s => ({ email: s + '@' + C.auth.domain, name: ro[s].name, room: ro[s].room }));
+      const tch = [{ email: C.teacherEmails[0] || 'teacher@' + C.auth.domain, name: '👩‍🏫 ครูตังค์ (สาธิต)' }];
+      const list = teacher ? tch : tch.concat(Object.keys(ro).sort().map(s => ({ email: s + '@' + C.auth.domain, name: ro[s].name, room: ro[s].room })));
       w.innerHTML = '<div class="modal-in" style="border-radius:20px;max-width:440px"><h3>เลือกบัญชีสาธิต</h3><div class="muted" style="margin-bottom:10px">โหมดสาธิต: จำลองการล็อกอินด้วย Google ของโรงเรียน (เปิดหลายแท็บเพื่อจำลองสมาชิกหลายคน)</div>' +
         list.map((u, i) => '<button class="acct" data-i="' + i + '"><b>' + u.name + '</b><span>' + u.email + (u.room ? ' · ม.' + u.room : '') + '</span></button>').join('') +
         (teacher ? '' : '<button class="acct" data-i="x"><b>บัญชีนอกโรงเรียน (ทดสอบการปฏิเสธ)</b><span>someone@gmail.com</span></button>') +
@@ -241,6 +241,7 @@
       return new RegExp(C.auth.sidPattern).test(sid) ? sid : null;
     },
     isTeacher: email => (C.teacherEmails || []).map(e => e.toLowerCase()).includes(String(email || '').toLowerCase()),
+    realConfigured() { const f = C.firebase || {}; return !!(f.apiKey && f.databaseURL); },
     resetDemo() { localStorage.removeItem(DKEY); sessionStorage.removeItem(DUSER); return IDB.clear('demomedia'); }
   };
 })();

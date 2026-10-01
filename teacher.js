@@ -61,7 +61,8 @@
   function badge() { if (B.mode === 'demo') return ['off', '🧪 โหมดสาธิต']; if (STATUS.failed) return ['err', '⚠ ส่งไม่สำเร็จ ' + STATUS.failed]; if (!STATUS.online) return ['pend', '📴 ออฟไลน์']; if (STATUS.pending) return ['pend', '⏫ ' + STATUS.pending]; return ['ok', '☁️ ซิงก์แล้ว']; }
   function shell(inner) {
     const [bc, bt] = badge(); const prop = Object.values(D.calendar || {}).filter(e => e.status === 'proposed').length;
-    return '<header class="topbar"><img class="logo" src="icons/logo-mark-512.png" alt=""><h1>หน้าครู · ' + esc(C.appFull) + '</h1><span class="sync ' + bc + '">' + bt + '</span>' + (USER ? '<span class="muted" style="color:#ddd6fe">' + esc(USER.email) + '</span><button class="sync" data-act="logout">ออก</button>' : '') + '</header>' +
+    return '<header class="topbar"><img class="logo" src="icons/logo-mark-512.png" alt=""><h1>แผงควบคุมครู · ' + esc(C.appName) + '</h1><a class="sync" href="index.html#/hub">🏠 ศูนย์กลาง</a><a class="sync" href="index.html#/hub/groups">👀 มุมมองนักเรียน</a><span class="sync ' + bc + '">' + bt + '</span>' + (USER ? '<span class="muted" style="color:#ddd6fe">' + esc(USER.email) + '</span><button class="sync" data-act="logout">ออก</button>' : '') + '</header>' +
+      (B.mode === 'demo' ? '<div class="demo-strip">🧪 โหมดทดลอง (ข้อมูลสาธิต ไม่กระทบข้อมูลจริง)' + (B.realConfigured() ? ' · <a href="teacher.html?demo=0">กลับไปข้อมูลจริง</a>' : '') + '</div>' : '') +
       '<div class="t-wrap"><div class="seg ttabs">' + TABS.map(t => '<button data-tab="' + t[0] + '" class="' + (V.tab === t[0] ? 'on' : '') + '">' + t[1] + (t[0] === 'cal' && prop ? ' <b class="tag gold">' + prop + '</b>' : '') + '</button>').join('') + '</div>' + inner + M.copyrightHTML() + '</div>';
   }
   const roomSel = (id, withAll) => '<select id="' + id + '">' + (withAll ? '<option value="">ทุกห้อง</option>' : '') + rooms().map(r => '<option value="' + r + '"' + (V.room === r ? ' selected' : '') + '>ม.' + r + ' (' + rosterOf(r).length + ' คน)</option>').join('') + '</select>';
@@ -211,7 +212,7 @@
       if (del.length) content += '<details class="card"><summary>🗑 รายการที่ถูกลบ (' + del.length + ')</summary>' + del.map(r => '<div class="row" style="padding:6px 0"><span class="grow">' + esc(F.summary(r).t) + ' <span class="muted">ลบโดย ' + esc(short((r.deletedBy || {}).name)) + ' ' + esc(thDateTime(r.deletedAt)) + '</span></span><button class="btn xs gold" data-act="trestore" data-kind="' + kind + '" data-id="' + r.id + '">กู้คืน</button></div>').join('') + '</details>';
       loadMedia(V.gid, list);
     }
-    return shell(left + '<div class="row" style="margin:4px 0 8px"><h2 class="grow" style="margin:0">' + esc(g.name) + ' <span class="muted">ม.' + esc(g.room) + '</span></h2><button class="btn sm sec" data-act="synthview">🧩 ประมวลผลกลาง</button></div>' + tabs +
+    return shell(left + '<div class="row" style="margin:4px 0 8px"><h2 class="grow" style="margin:0">' + esc(g.name) + ' <span class="muted">ม.' + esc(g.room) + '</span></h2><button class="btn sm sec" data-act="synthview">🧩 ประมวลผลกลาง</button><a class="btn sm gold" href="index.html?as=' + esc(V.gid) + '">👀 มุมมองนักเรียนของกลุ่มนี้</a></div>' + tabs +
       '<div class="detail"><div>' + content + '</div><div class="grade-panel">' + gradePanel(g, ms, sy, t) + '</div></div>');
   }
   function rubricRow(c, r, attr) { return '<div class="f"><div class="lab">' + c.k + ' · ' + esc(c.name) + '</div><div class="rub">' + C.levels.map(l => '<button ' + attr + ' data-k="' + c.k + '" data-v="' + l.v + '" class="' + (r[c.k] === l.v ? 'on' : '') + '"><b>' + l.v + '</b>' + l.en + '</button>').join('') + '</div></div>'; }
@@ -331,7 +332,7 @@
   function renderLogin(msg) {
     msg = msg || loginMsg;
     $('#root').innerHTML = '<div class="hero"><div class="logos"><img class="big" src="icons/logo-full.png" alt="Mae Sot Musicology"></div><h1>หน้าครู</h1><p>' + esc(C.appFull) + '</p></div><div class="card login-card">' + (msg ? '<div class="warn-box">' + esc(msg) + '</div>' : '') +
-      '<button class="btn gold block" data-act="login">เข้าสู่ระบบครูด้วย Google</button><div class="muted" style="margin-top:8px">อนุญาตเฉพาะ: ' + esc((C.teacherEmails || []).join(', ')) + '</div>' + (B.mode === 'demo' ? '<div class="tip" style="margin-top:10px">🧪 โหมดสาธิต — ยังไม่ได้เชื่อม Firebase · <a href="index.html">เปิดแอปนักเรียน</a> ในแท็บใหม่เพื่อทดลองพร้อมกัน</div>' : '') + '</div>' + M.copyrightHTML();
+      '<button class="btn gold block" data-act="login">เข้าสู่ระบบครูด้วย Google</button><a class="btn sec block" style="margin-top:8px" href="index.html">🏠 ไปหน้าหลัก (ล็อกอินที่เดียว ระบบพาไปเอง)</a><div class="muted" style="margin-top:8px">อนุญาตเฉพาะ: ' + esc((C.teacherEmails || []).join(', ')) + '</div>' + (B.mode === 'demo' ? '<div class="tip" style="margin-top:10px">🧪 โหมดสาธิต — ยังไม่ได้เชื่อม Firebase · <a href="index.html">เปิดแอปนักเรียน</a> ในแท็บใหม่เพื่อทดลองพร้อมกัน</div>' : '') + '</div>' + M.copyrightHTML();
   }
 
   /* ---------- events ---------- */
@@ -400,7 +401,7 @@
     B.onAuth(u => {
       subs.forEach(f => f()); subs = []; gsubs.forEach(f => f()); gsubs = []; D.records = null;
       if (!u) { USER = null; renderLogin(); return; }
-      if (!B.isTeacher(u.email)) { USER = null; loginMsg = 'บัญชี ' + u.email + ' ไม่มีสิทธิ์ครู'; B.signOut(); return; }
+      if (!B.isTeacher(u.email)) { USER = null; if (B.sidFromEmail(u.email)) { location.replace('index.html'); return; } loginMsg = 'บัญชี ' + u.email + ' ไม่มีสิทธิ์ครู'; B.signOut(); return; }
       loginMsg = '';
       USER = u; startData(); render();
     });

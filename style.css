@@ -247,3 +247,18 @@ img.sig { height: 56px; display: block; border: 1px solid var(--line); border-ra
   #print-root { display: block !important; }
   .rp-page { break-after: page; page-break-after: always; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* ---------- ศูนย์กลาง / มุมมองครู / โหมดทดลอง ---------- */
+.hero.small { padding-bottom: 70px; } .hero.small .logos img.big { height: 120px; }
+.hub { max-width: 760px; margin: -26px auto 0; padding: 0 16px; position: relative; z-index: 2; }
+.hub-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.hub-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; text-decoration: none; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 16px; box-shadow: var(--sh); cursor: pointer; font: inherit; transition: transform .12s, box-shadow .12s; }
+.hub-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(46,16,101,.15); }
+.hub-btn span { font-size: 2rem; } .hub-btn b { font-family: var(--head); font-size: 1.05rem; color: var(--p700); } .hub-btn small { color: var(--mut); font-size: .84rem; line-height: 1.4; }
+.hub-btn.gold { background: linear-gradient(135deg, var(--p700), var(--p500)); border: 0; } .hub-btn.gold b { color: var(--g300); } .hub-btn.gold small { color: #ddd6fe; }
+.viewas { position: sticky; top: 62px; z-index: 19; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: var(--g100); color: var(--g700); border-bottom: 1px solid #f0dfa6; padding: 6px 14px; font-size: .86rem; font-weight: 600; }
+.demo-strip { background: repeating-linear-gradient(135deg, #fff6d8, #fff6d8 10px, #fdf0c4 10px, #fdf0c4 20px); color: #7a5308; text-align: center; font-size: .82rem; padding: 6px 12px; border-bottom: 1px solid #f0dfa6; position: relative; z-index: 3; }
+.demo-strip a { color: var(--p600); font-weight: 600; }
+.hub .demo-strip { border-radius: 12px; margin-bottom: 12px; border: 1px solid #f0dfa6; }
+fieldset.ro { border: 0; padding: 0; margin: 0; min-width: 0; }
+a.sync { text-decoration: none; }
