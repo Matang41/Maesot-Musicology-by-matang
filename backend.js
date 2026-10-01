@@ -213,7 +213,8 @@
   const B = window.B = {
     mode: 'demo', status, IDB, uid, clone, getAt, setAt,
     configured() {
-      try { const q = new URLSearchParams(location.search).get('demo'); if (q === '1') sessionStorage.setItem('mcm5_force_demo', '1'); if (q === '0') sessionStorage.removeItem('mcm5_force_demo'); if (sessionStorage.getItem('mcm5_force_demo')) return false; } catch (e) { /* ignore */ }
+      try { const q = new URLSearchParams(location.search).get('demo'); const real = this.realConfigured();
+        if (q === '1' && (!real || sessionStorage.getItem('mcm5_demo_ok'))) sessionStorage.setItem('mcm5_force_demo', '1'); /* โหมดทดลองเปิดได้จากศูนย์กลางครูเท่านั้น */ if (q === '0') sessionStorage.removeItem('mcm5_force_demo'); if (sessionStorage.getItem('mcm5_force_demo')) return false; } catch (e) { /* ignore */ }
       const f = C.firebase || {}; return !!(f.apiKey && f.databaseURL && f.projectId); },
     async init() {
       impl = this.configured() ? FBImpl : DemoImpl; this.mode = impl.name;

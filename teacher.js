@@ -19,7 +19,8 @@
   const maxOf = t => (D.config.max && D.config.max[t.id] != null) ? +D.config.max[t.id] : t.max;
   const totalMax = () => C.tasks.reduce((a, t) => a + maxOf(t), 0);
   const rooms = () => Array.from({ length: C.course.rooms || 14 }, (_, i) => '5/' + (i + 1));
-  const rosterOf = room => Object.keys(D.roster || {}).map(sid => Object.assign({ sid }, D.roster[sid])).filter(s => !room || s.room === room).sort((a, b) => (+a.no) - (+b.no));
+  const rosterAll = room => Object.keys(D.roster || {}).map(sid => Object.assign({ sid }, D.roster[sid])).filter(s => !room || s.room === room).sort((a, b) => ((+a.no) || 999) - ((+b.no) || 999) || String(a.sid).localeCompare(String(b.sid)));
+  const rosterOf = room => rosterAll(room).filter(s => !s.left);
   const groupsOf = room => Object.keys(D.groups || {}).map(gid => Object.assign({ gid }, D.groups[gid])).filter(g => !room || g.room === room).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   const memList = g => Object.keys((g && g.members) || {}).map(sid => ({ sid, name: g.members[sid].name, no: g.members[sid].no, roles: (g.roles && g.roles[sid]) || [] })).sort((a, b) => (+a.no) - (+b.no));
   const tMe = () => ({ sid: 'teacher', name: (USER && USER.name) || 'ครู' });
@@ -54,10 +55,10 @@
     ['records', 'docs', 'history'].forEach(k => gsubs.push(B.on(k + '/' + gid, v => { D.gdata[gid][k] = v || {}; schedule(); })));
     memList(D.groups[gid]).forEach(m => gsubs.push(B.on('personal/' + m.sid, v => { D.personal[m.sid] = v || {}; schedule(); })));
   }
-  let rT = null; function schedule() { cancelAnimationFrame(rT); rT = requestAnimationFrame(() => render(true)); }
+  let rT = null, DRAGGING = false; function schedule() { if (DRAGGING) return; cancelAnimationFrame(rT); rT = requestAnimationFrame(() => render(true)); }
 
   /* ---------- shell ---------- */
-  const TABS = [['dash', '📋 ภาพรวม'], ['groups', '👥 รายชื่อ & จัดกลุ่ม'], ['cal', '🗓 ปฏิทิน'], ['grade', '✅ ตรวจงาน'], ['scores', '📤 คะแนน/ส่งออก'], ['backup', '🛟 สำรอง/กู้คืน']];
+  const TABS = [['dash', '📋 ภาพรวม'], ['roster', '🧾 จัดการรายชื่อ'], ['groups', '👥 จัดกลุ่ม'], ['cal', '🗓 ปฏิทิน'], ['grade', '✅ ตรวจงาน'], ['scores', '📤 คะแนน/ส่งออก'], ['backup', '🛟 สำรอง/กู้คืน']];
   function badge() { if (B.mode === 'demo') return ['off', '🧪 โหมดสาธิต']; if (STATUS.failed) return ['err', '⚠ ส่งไม่สำเร็จ ' + STATUS.failed]; if (!STATUS.online) return ['pend', '📴 ออฟไลน์']; if (STATUS.pending) return ['pend', '⏫ ' + STATUS.pending]; return ['ok', '☁️ ซิงก์แล้ว']; }
   function shell(inner) {
     const [bc, bt] = badge(); const prop = Object.values(D.calendar || {}).filter(e => e.status === 'proposed').length;
@@ -112,6 +113,58 @@
     W(B.update('', upd));
   }
 
+  /* ---------- จัดการรายชื่อ (เพิ่ม/แก้/ย้ายห้อง/ออก/ลากเรียงเลขที่) — ครูเท่านั้น ---------- */
+  function viewRoster() {
+    const all = rosterAll(V.room), act = all.filter(s => !s.left), left = all.filter(s => s.left);
+    const grpName = sid => { const g = D.groups[D.memberOf[sid]]; return g ? g.name : ''; };
+    const row = (s, i) => '<div class="rrow" data-sid="' + esc(s.sid) + '"><span class="dh" title="ลากเพื่อจัดลำดับ" aria-label="ลาก">⠿</span><b class="rno">' + (i + 1) + '</b><div class="grow"><div class="rec-t">' + esc(s.name) + '</div><div class="rec-s">' + esc(s.sid) + '@' + esc(C.auth.domain) + (grpName(s.sid) ? ' · 👥 ' + esc(grpName(s.sid)) : ' · <span style="color:var(--warn)">ยังไม่มีกลุ่ม</span>') + ((+s.no) !== i + 1 ? ' · <span style="color:var(--warn)">เลขที่เดิม ' + esc(s.no || '-') + '</span>' : '') + '</div></div>' +
+      '<button class="btn xs ghost" data-act="rmove" data-d="-1" title="เลื่อนขึ้น">▲</button><button class="btn xs ghost" data-act="rmove" data-d="1" title="เลื่อนลง">▼</button><button class="btn xs sec" data-act="redit">✎ แก้ไข</button><button class="btn xs bad" data-act="rleave">🚪 ออก</button></div>';
+    const unsynced = act.some((s, i) => (+s.no) !== i + 1);
+    return shell('<div class="toolbar"><div class="f"><label>ห้อง</label>' + roomSel('v_room') + '</div><button class="btn gold" data-act="radd">＋ เพิ่มนักเรียน</button><button class="btn sec" data-act="import">📥 นำเข้าจากไฟล์/วาง</button><div class="grow"></div>' +
+      '<div class="row wrap"><span class="muted">เรียงใหม่ทั้งห้อง:</span><button class="btn xs sec" data-act="rsort" data-by="sid">ตามรหัส</button><button class="btn xs sec" data-act="rsort" data-by="name">ตามชื่อ</button></div></div>' +
+      '<div class="card"><div class="row"><div class="card-title grow">🧾 รายชื่อ ม.' + esc(V.room) + ' · ' + act.length + ' คน</div>' + (unsynced ? '<button class="btn sm gold" data-act="rrenum">บันทึกเลขที่ 1–' + act.length + ' ตามลำดับนี้</button>' : '') + '</div>' +
+      '<div class="hint" style="margin-bottom:8px">ลาก ⠿ (หรือกด ▲▼) เพื่อจัดลำดับ ระบบบันทึกเลขที่ใหม่ให้ทันที · การเปลี่ยนเลขที่ไม่กระทบงานที่นักเรียนบันทึกไว้ · เฉพาะครูเท่านั้นที่แก้รายชื่อได้</div>' +
+      (act.length ? '<div id="rlist">' + act.map(row).join('') + '</div>' : '<div class="empty">ยังไม่มีรายชื่อห้องนี้ — กด “เพิ่มนักเรียน” หรือ “นำเข้า”</div>') + '</div>' +
+      (left.length ? '<details class="card"><summary>🚪 นักเรียนที่ออก/ย้ายไปแล้ว (' + left.length + ')</summary>' + left.map(s => '<div class="row" style="padding:6px 0;border-bottom:1px dashed var(--line)"><span class="grow">' + esc(s.sid) + ' · ' + esc(s.name) + ' <span class="muted">ออกเมื่อ ' + esc(thDateTime(s.leftAt)) + (s.leftNote ? ' · ' + esc(s.leftNote) : '') + '</span></span><button class="btn xs gold" data-act="rback" data-sid="' + esc(s.sid) + '">↩ คืนสถานะ</button></div>').join('') + '<div class="hint" style="margin-top:6px">นักเรียนที่ออกแล้วล็อกอินไม่ได้ และไม่อยู่ในไฟล์ส่งออกคะแนน แต่งานที่เคยบันทึกยังเก็บอยู่กับกลุ่ม</div></details>' : ''));
+  }
+  function saveOrder(sids) {
+    const upd = {}; sids.forEach((sid, i) => { const r = D.roster[sid]; if (!r || +r.no === i + 1) return; upd['roster/' + sid + '/no'] = i + 1; r.no = i + 1; const gid = D.memberOf[sid]; if (gid && D.groups[gid] && D.groups[gid].members && D.groups[gid].members[sid]) upd['groups/' + gid + '/members/' + sid + '/no'] = i + 1; });
+    if (Object.keys(upd).length) { W(B.update('', upd)); toast('บันทึกเลขที่ใหม่แล้ว'); }
+  }
+  const listOrder = () => $$('#rlist .rrow').map(r => r.dataset.sid);
+  function initDrag() {
+    const list = $('#rlist'); if (!list) return; let drag = null, sy = 0;
+    list.addEventListener('pointerdown', e => { const h = e.target.closest('.dh'); if (!h) return; e.preventDefault(); drag = h.closest('.rrow'); drag.classList.add('dragging'); DRAGGING = true; h.setPointerCapture(e.pointerId); });
+    list.addEventListener('pointermove', e => {
+      if (!drag) return; const y = e.clientY; let before = null;
+      for (const r of $$('.rrow', list)) { if (r === drag) continue; const b = r.getBoundingClientRect(); if (y < b.top + b.height / 2) { before = r; break; } }
+      if (before !== drag.nextSibling) list.insertBefore(drag, before);
+      if (y < 90) window.scrollBy(0, -12); else if (y > window.innerHeight - 60) window.scrollBy(0, 12);
+      $$('.rrow .rno', list).forEach((n, i) => n.textContent = i + 1);
+    });
+    const end = () => { if (!drag) return; drag.classList.remove('dragging'); drag = null; DRAGGING = false; saveOrder(listOrder()); render(true); };
+    list.addEventListener('pointerup', end); list.addEventListener('pointercancel', end);
+  }
+  function studentModal(sid) {
+    const s = sid ? Object.assign({ sid }, D.roster[sid]) : { sid: '', name: '', room: V.room, no: rosterOf(V.room).length + 1 };
+    const w = modal('<h3>' + (sid ? '✎ แก้ไขข้อมูลนักเรียน' : '＋ เพิ่มนักเรียน') + '</h3>' +
+      '<div class="f"><label>รหัสนักเรียน</label><input type="text" inputmode="numeric" id="s_sid" value="' + esc(s.sid) + '"' + (sid ? ' disabled' : '') + '><div class="hint">อีเมลที่ใช้ล็อกอิน: <b id="s_mail">' + esc((s.sid || 'รหัส') + '@' + C.auth.domain) + '</b>' + (sid ? ' (เปลี่ยนรหัสไม่ได้ ถ้ากรอกผิดให้กด “ออก” แล้วเพิ่มใหม่)' : '') + '</div></div>' +
+      '<div class="f"><label>ชื่อ-นามสกุล (มีคำนำหน้า)</label><input type="text" id="s_name" value="' + esc(s.name) + '"></div>' +
+      '<div class="row"><div class="f grow"><label>ห้อง</label><select id="s_room">' + rooms().map(r => '<option value="' + r + '"' + (r === s.room ? ' selected' : '') + '>ม.' + r + '</option>').join('') + '</select></div><div class="f grow"><label>เลขที่</label><input type="number" id="s_no" value="' + esc(s.no) + '" min="1"></div></div>' +
+      (sid && D.memberOf[sid] ? '<div class="hint" style="margin-bottom:10px">ถ้าย้ายห้อง นักเรียนจะถูกนำออกจากกลุ่มเดิม (งานที่บันทึกยังอยู่กับกลุ่ม)</div>' : '') +
+      '<button class="btn gold block" id="s_ok">บันทึก</button>', { center: true });
+    const sidIn = $('#s_sid', w); sidIn.oninput = () => { $('#s_mail', w).textContent = (sidIn.value.trim() || 'รหัส') + '@' + C.auth.domain; };
+    $('#s_ok', w).onclick = () => {
+      const nsid = sid || sidIn.value.trim(), name = $('#s_name', w).value.trim(), room = $('#s_room', w).value, no = +$('#s_no', w).value || '';
+      if (!new RegExp(C.auth.sidPattern).test(nsid)) { toast('รหัสนักเรียนต้องเป็นตัวเลข 4–8 หลัก'); return; }
+      if (!name) { toast('กรอกชื่อ'); return; }
+      if (!sid && D.roster[nsid] && !D.roster[nsid].left) { toast('มีรหัส ' + nsid + ' ในระบบแล้ว (ม.' + D.roster[nsid].room + ')', 3500); return; }
+      const upd = { ['roster/' + nsid]: { name, room, no } }; const gid = D.memberOf[nsid];
+      if (gid && D.groups[gid]) { if (D.groups[gid].room !== room) { upd['groups/' + gid + '/members/' + nsid] = null; upd['groups/' + gid + '/roles/' + nsid] = null; upd['memberOf/' + nsid] = null; } else upd['groups/' + gid + '/members/' + nsid] = { name, no }; }
+      W(B.update('', upd)); w.remove(); toast(sid ? 'บันทึกแล้ว' : 'เพิ่ม ' + name + ' แล้ว');
+    };
+  }
+
   /* ---------- นำเข้ารายชื่อ ---------- */
   const normRoom = s => { const m = /(\d)\s*\/\s*(\d{1,2})/.exec(String(s || '')); return m ? m[1] + '/' + (+m[2]) : ''; };
   function parseTable(rows, defRoom) {
@@ -154,7 +207,7 @@
       try { if (/\.xlsx?$/i.test(f.name)) { await M.loadLibs('xlsx'); const wb = XLSX.read(await f.arrayBuffer()); const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false }); parsed = parseTable(rows, $('#im_room', w).value); } else { parsed = parseTable(parseCSV(await f.text()), $('#im_room', w).value); } show(); }
       catch (er) { toast('อ่านไฟล์ไม่สำเร็จ: ' + er.message, 4000); }
     };
-    $('#im_save', w).onclick = () => { const upd = {}; parsed.forEach(p => { upd['roster/' + p.sid] = { name: p.name, no: p.no, room: p.room }; }); W(B.update('', upd)); w.remove(); toast('บันทึกรายชื่อ ' + parsed.length + ' คนแล้ว'); if (parsed[0]) { V.room = parsed[0].room; render(); } };
+    $('#im_save', w).onclick = () => { const upd = {}; const nx = {}; parsed.forEach(p => { if (!p.no) { if (nx[p.room] == null) nx[p.room] = rosterOf(p.room).reduce((m, s) => Math.max(m, +s.no || 0), 0); p.no = ++nx[p.room]; } }); parsed.forEach(p => { upd['roster/' + p.sid] = { name: p.name, no: p.no, room: p.room }; }); W(B.update('', upd)); w.remove(); toast('บันทึกรายชื่อ ' + parsed.length + ' คนแล้ว'); if (parsed[0]) { V.room = parsed[0].room; render(); } };
   }
 
   /* ---------- ปฏิทิน ---------- */
@@ -205,7 +258,7 @@
       content += ms.map(m => { const p = D.personal[m.sid] || {}; const rf = p.reflection || {}; return '<div class="card"><div class="row">' + avatar(m.name) + '<b class="grow">' + esc(m.name) + '</b>' + (p.flags && p.flags.t7 ? '<span class="tag st-ok">● ส่งแล้ว</span>' : '') + '</div>' + (M.filled(rf) ? M.renderRecord('reflection', rf, {}, {}) : '<div class="muted">ยังไม่ได้เขียน</div>') + '</div>'; }).join('');
     } else if (F.single) {
       const doc = (gd.docs || {})[kind] || {}; content += M.filled(doc) ? '<div class="card">' + M.renderRecord(kind, doc, media, { showBy: true }) + '</div>' : '<div class="empty">ยังไม่มีข้อมูล</div>';
-      if (kind === 'report') content += '<div class="card"><button class="btn" data-act="gpdf">⬇ รายงานกลุ่ม PDF</button> <button class="btn sec" data-act="gpreview">👁 ดูตัวอย่าง</button> <button class="btn sec" data-act="gposter">🎨 โปสเตอร์</button></div>';
+      if (kind === 'report') content += '<div class="card"><div class="card-title">📑 รายงานวิชาการอัตโนมัติ</div><div class="row wrap" style="margin-bottom:10px"><button class="btn gold" data-act="gacdocx">⬇ Word (.docx)</button><button class="btn" data-act="gacpdf">⬇ PDF</button><button class="btn sec" data-act="gacprev">👁 ดูตัวอย่าง</button></div><div class="card-title">📒 สมุดบันทึกกลุ่ม</div><button class="btn" data-act="gpdf">⬇ รายงานกลุ่ม PDF</button> <button class="btn sec" data-act="gpreview">👁 ดูตัวอย่าง</button> <button class="btn sec" data-act="gposter">🎨 โปสเตอร์</button></div>';
     } else {
       const all = M.listOf(gd, kind, true), list = all.filter(r => !r.deleted), del = all.filter(r => r.deleted);
       content += list.length ? list.map((r, i) => { const s = F.summary(r), c = M.commObj(r); return '<div class="card" style="border-left:5px solid ' + (c ? c.color : 'var(--p200)') + '"><div class="rec-t">' + (c ? c.emoji + ' ' : '') + (i + 1) + '. ' + esc(s.t) + '</div><div class="rec-s">' + esc(s.s) + '</div>' + M.metaHTML(r) + M.renderRecord(kind, r, media, { events: ev }) + '</div>'; }).join('') : '<div class="empty">ยังไม่มีรายการ</div>';
@@ -324,15 +377,15 @@
   async function render(keep) {
     if (!USER) return;
     const y = window.scrollY; let html;
-    if (V.tab === 'groups') html = viewGroups(); else if (V.tab === 'cal') html = viewCal(); else if (V.tab === 'grade') html = viewGrade(); else if (V.tab === 'scores') html = viewScores(); else if (V.tab === 'backup') html = await viewBackup(); else html = viewDash();
+    if (V.tab === 'roster') html = viewRoster(); else if (V.tab === 'groups') html = viewGroups(); else if (V.tab === 'cal') html = viewCal(); else if (V.tab === 'grade') html = viewGrade(); else if (V.tab === 'scores') html = viewScores(); else if (V.tab === 'backup') html = await viewBackup(); else html = viewDash();
     const act = document.activeElement; const actId = act && act.id; const selS = act && act.selectionStart;
-    $('#root').innerHTML = html; window.scrollTo(0, keep ? y : 0);
+    $('#root').innerHTML = html; window.scrollTo(0, keep ? y : 0); if (V.tab === 'roster') initDrag();
     if (actId && /^(g_c|i_c|g_s|i_s)$/.test(actId)) { const el = $('#' + actId); if (el) { el.focus(); try { el.setSelectionRange(selS, selS); } catch (er) { /* number input */ } } }
   }
   function renderLogin(msg) {
     msg = msg || loginMsg;
     $('#root').innerHTML = '<div class="hero"><div class="logos"><img class="big" src="icons/logo-full.png" alt="Mae Sot Musicology"></div><h1>หน้าครู</h1><p>' + esc(C.appFull) + '</p></div><div class="card login-card">' + (msg ? '<div class="warn-box">' + esc(msg) + '</div>' : '') +
-      '<button class="btn gold block" data-act="login">เข้าสู่ระบบครูด้วย Google</button><a class="btn sec block" style="margin-top:8px" href="index.html">🏠 ไปหน้าหลัก (ล็อกอินที่เดียว ระบบพาไปเอง)</a><div class="muted" style="margin-top:8px">อนุญาตเฉพาะ: ' + esc((C.teacherEmails || []).join(', ')) + '</div>' + (B.mode === 'demo' ? '<div class="tip" style="margin-top:10px">🧪 โหมดสาธิต — ยังไม่ได้เชื่อม Firebase · <a href="index.html">เปิดแอปนักเรียน</a> ในแท็บใหม่เพื่อทดลองพร้อมกัน</div>' : '') + '</div>' + M.copyrightHTML();
+      '<button class="btn gold block" data-act="login">เข้าสู่ระบบครูด้วย Google</button><a class="btn sec block" style="margin-top:8px" href="index.html">🏠 ไปหน้าหลัก</a><div class="muted" style="margin-top:8px">อนุญาตเฉพาะ: ' + esc((C.teacherEmails || []).join(', ')) + '</div>' + (B.mode === 'demo' ? '<div class="tip" style="margin-top:10px">🧪 โหมดทดลอง — กดปุ่มด้านบนแล้วเลือกบัญชีครูสาธิต</div>' : '') + '</div>' + M.copyrightHTML();
   }
 
   /* ---------- events ---------- */
@@ -363,6 +416,18 @@
     login: async () => { try { await B.signIn({ teacher: true }); } catch (er) { renderLogin(er.message || er.code); } },
     logout: async () => { await B.signOut(); },
     import: () => importModal(),
+    radd: () => studentModal(null),
+    redit: bt => studentModal(bt.closest('.rrow').dataset.sid),
+    rmove: bt => { const row = bt.closest('.rrow'), d = +bt.dataset.d; const sib = d < 0 ? row.previousElementSibling : row.nextElementSibling; if (!sib) return; if (d < 0) sib.before(row); else sib.after(row); saveOrder(listOrder()); render(true); },
+    rsort: bt => { const by = bt.dataset.by; const act = rosterOf(V.room).slice().sort((a, b) => by === 'sid' ? String(a.sid).localeCompare(String(b.sid), 'th', { numeric: true }) : String(a.name).replace(/^(นาย|นางสาว|นาง|เด็กชาย|เด็กหญิง)/, '').localeCompare(String(b.name).replace(/^(นาย|นางสาว|นาง|เด็กชาย|เด็กหญิง)/, ''), 'th')); if (!confirm('เรียงเลขที่ใหม่ทั้งห้อง ม.' + V.room + ' ' + (by === 'sid' ? 'ตามรหัสนักเรียน' : 'ตามชื่อ (ไม่นับคำนำหน้า)') + '?')) return; saveOrder(act.map(s => s.sid)); },
+    rrenum: () => saveOrder(rosterOf(V.room).map(s => s.sid)),
+    rleave: bt => {
+      const sid = bt.closest('.rrow').dataset.sid, s = D.roster[sid]; const note = prompt('นำ ' + s.name + ' ออกจากรายชื่อ (ย้ายโรงเรียน/ลาออก/ย้ายห้องเรียนอื่น)\nหมายเหตุ (ไม่บังคับ):', 'ย้ายออก'); if (note === null) return;
+      const upd = { ['roster/' + sid + '/left']: true, ['roster/' + sid + '/leftAt']: Date.now(), ['roster/' + sid + '/leftNote']: note || '' }; const gid = D.memberOf[sid];
+      if (gid) { upd['groups/' + gid + '/members/' + sid] = null; upd['groups/' + gid + '/roles/' + sid] = null; upd['memberOf/' + sid] = null; }
+      W(B.update('', upd)); toast('นำออกแล้ว — กด “บันทึกเลขที่” หากต้องการเรียงเลขที่ใหม่', 3500);
+    },
+    rback: bt => { const sid = bt.dataset.sid; W(B.update('roster/' + sid, { left: null, leftAt: null, leftNote: null, no: rosterOf(D.roster[sid].room).length + 1 })); toast('คืนสถานะแล้ว'); },
     clearsel: () => { V.sel.clear(); render(true); },
     newgroup: () => { const n = groupsOf(V.room).length + 1; const name = prompt('ชื่อกลุ่ม', 'กลุ่ม ' + n); if (!name) return; createGroup(name.trim(), Array.from(V.sel)); V.sel.clear(); toast('สร้างกลุ่มแล้ว'); },
     addto: bt => { addToGroup(bt.dataset.id, Array.from(V.sel)); V.sel.clear(); toast('เพิ่มสมาชิกแล้ว'); },
@@ -383,6 +448,9 @@
     synthview: () => synthModal(),
     trestore: bt => { W(B.update('records/' + V.gid + '/' + bt.dataset.kind + '/' + bt.dataset.id, { deleted: false, restoredAt: Date.now(), updatedAt: Date.now(), updatedBy: tMe() })); W(B.set('history/' + V.gid + '/' + B.uid(), { at: Date.now(), by: tMe(), kind: bt.dataset.kind, rid: bt.dataset.id, act: 'restore', snap: null })); toast('กู้คืนแล้ว'); },
     gpdf: async bt => { const ctx = await gctx(); const old = bt.textContent; bt.disabled = true; try { await M.exportPDF(M.buildPages(D.gdata[V.gid], ctx), 'รายงาน-' + D.groups[V.gid].name + '.pdf', (i, n) => bt.textContent = 'หน้า ' + i + '/' + n); } catch (er) { toast('สร้าง PDF ไม่ได้ (ต้องมีอินเทอร์เน็ต)', 3500); } bt.disabled = false; bt.textContent = old; },
+    gacdocx: async bt => { const o = bt.textContent; bt.disabled = true; bt.textContent = 'กำลังเรียบเรียง…'; try { await REPORT.exportDocx(D.gdata[V.gid], await gctx()); } catch (er) { toast('สร้างไม่สำเร็จ: ' + er.message, 4000); } bt.disabled = false; bt.textContent = o; },
+    gacpdf: async bt => { const o = bt.textContent; bt.disabled = true; try { await REPORT.exportPdf(D.gdata[V.gid], await gctx(), (i, n) => bt.textContent = 'หน้า ' + i + '/' + n); } catch (er) { toast('สร้าง PDF ไม่ได้ (ต้องมีอินเทอร์เน็ต)', 3500); } bt.disabled = false; bt.textContent = o; },
+    gacprev: async () => REPORT.preview(D.gdata[V.gid], await gctx()),
     gpreview: async () => M.previewPages(M.buildPages(D.gdata[V.gid], await gctx())),
     gposter: async () => { const gd = D.gdata[V.gid]; const n0 = M.listOf(gd, 'notes')[0]; const cid = ((gd.docs || {}).report || {}).posterCommunity || (n0 ? (M.commObj(n0) || {}).id : '') || 'karen'; try { await M.exportPoster(M.buildPoster(gd, await gctx(), cid), 'โปสเตอร์-' + D.groups[V.gid].name + '.png'); } catch (er) { toast('สร้างโปสเตอร์ไม่ได้', 3000); } },
     exp: bt => doExport(bt.dataset.k),
@@ -392,7 +460,7 @@
     retry: async () => { await B.retryFailed(); render(true); },
     resetdemo: async () => { if (!confirm('ล้างข้อมูลสาธิตทั้งหมด?')) return; await B.resetDemo(); location.reload(); }
   };
-  async function gctx() { const g = D.groups[V.gid], gd = D.gdata[V.gid]; const recs = []; M.LIST_KINDS.forEach(k => M.listOf(gd, k).forEach(r => recs.push(r))); const mm = mediaFor(V.gid); for (const r of recs) for (const id of M.mediaIds(r)) if (!mm[id]) { const m = await B.getMedia(V.gid, id); if (m) mm[id] = m; } return { group: g, members: memList(g), media: mm, events: D.calendar }; }
+  async function gctx() { const g = D.groups[V.gid], gd = D.gdata[V.gid]; const recs = []; M.LIST_KINDS.forEach(k => M.listOf(gd, k).forEach(r => recs.push(r))); const mm = mediaFor(V.gid); for (const r of recs) for (const id of M.mediaIds(r)) if (!mm[id]) { const m = await B.getMedia(V.gid, id); if (m) mm[id] = m; } return { gid: V.gid, group: g, members: memList(g), media: mm, events: D.calendar }; }
 
   /* ---------- start ---------- */
   (async function boot() {

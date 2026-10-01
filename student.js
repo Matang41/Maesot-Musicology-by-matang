@@ -76,6 +76,7 @@
     $('#root').innerHTML = '<div class="empty" style="padding-top:30vh">กำลังโหลดข้อมูล…</div>';
     await first('roster/' + sid, v => { D.roster = v; });
     if (!D.roster) { renderBlocked('ไม่พบรหัส ' + sid + ' ในรายชื่อ', 'ครูยังไม่ได้นำเข้ารายชื่อของคุณ หรือรหัสไม่ตรง กรุณาแจ้งครู'); return; }
+    if (D.roster.left) { renderBlocked('บัญชีนี้ไม่อยู่ในรายชื่อรายวิชาแล้ว', 'ครูได้นำรหัส ' + sid + ' ออกจากรายชื่อ (' + (D.roster.leftNote || 'ย้ายออก') + ') หากไม่ถูกต้องกรุณาแจ้งครู'); return; }
     ME = { sid, name: D.roster.name, room: D.roster.room, no: D.roster.no, email: u.email, photo: u.photo };
     await Promise.all([
       first('memberOf/' + sid, v => { if ((v || null) !== GID) subGroup(v); }),
@@ -106,8 +107,8 @@
       '<a class="hub-btn gold" href="teacher.html' + (demo ? '' : '') + '"><span>🧑‍🏫</span><b>แผงควบคุมครู</b><small>นำเข้ารายชื่อ · จัดกลุ่ม · ปฏิทิน · ตรวจงาน · ส่งออกคะแนน · สำรองข้อมูล</small></a>' +
       '<button class="hub-btn" data-act="hubview"><span>👀</span><b>ดูแอปในมุมมองนักเรียน</b><small>เลือกกลุ่ม แล้วเห็นหน้าจอเหมือนที่นักเรียนเห็น (ข้อมูลจริง อ่านอย่างเดียว)</small></button>' +
       (demo ? '<button class="hub-btn" data-act="demoas"><span>🧪</span><b>ทดลองเป็นนักเรียน</b><small>สลับเป็นบัญชีนักเรียนสาธิต แล้วลองบันทึก แนบรูป ส่งงานได้เต็มรูปแบบ</small></button>'
-        : '<a class="hub-btn" href="index.html?demo=1"><span>🧪</span><b>ทดลองระบบนักเรียน</b><small>ใช้ข้อมูลสาธิต ลองบันทึก แนบรูป ส่งงานได้เต็มรูปแบบ ไม่กระทบข้อมูลจริง</small></a>') +
-      '<a class="hub-btn" href="teacher.html?demo=1"><span>🧰</span><b>ทดลองแผงครู (ข้อมูลสาธิต)</b><small>ฝึกจัดกลุ่ม ให้คะแนน ส่งออก โดยไม่แตะข้อมูลจริง</small></a>' +
+        : '<a class="hub-btn" href="#" data-act="godemo" data-to="index.html?demo=1"><span>🧪</span><b>ทดลองระบบนักเรียน</b><small>ใช้ข้อมูลสาธิต ลองบันทึก แนบรูป ส่งงานได้เต็มรูปแบบ ไม่กระทบข้อมูลจริง</small></a>') +
+      '<a class="hub-btn" href="#" data-act="godemo" data-to="teacher.html?demo=1"><span>🧰</span><b>ทดลองแผงครู (ข้อมูลสาธิต)</b><small>ฝึกจัดกลุ่ม ให้คะแนน ส่งออก โดยไม่แตะข้อมูลจริง</small></a>' +
       '</div><div class="card" id="hubGroups"' + (route().b === 'groups' ? '' : ' hidden') + '><div class="card-title">👀 เลือกกลุ่มที่จะดู</div>' +
       (gs.length ? Object.keys(byRoom).sort((a, b) => a.localeCompare(b, 'th', { numeric: true })).map(r => '<div class="muted" style="margin:8px 0 4px">ม.' + esc(r) + '</div><div class="row wrap">' + byRoom[r].map(g => '<button class="btn sm sec" data-act="viewas" data-id="' + esc(g.id) + '">' + esc(g.name) + ' (' + Object.keys(g.members || {}).length + ')</button>').join('') + '</div>').join('') : '<div class="muted">ยังไม่มีกลุ่ม — ไปที่แผงควบคุมครู → รายชื่อ & จัดกลุ่ม</div>') + '</div>' +
       '<button class="btn sec block" data-act="logout">ออกจากระบบ</button></div>' + M.copyrightHTML();
@@ -207,12 +208,24 @@
   const GSVG = '<svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.6-.4-3.9z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/></svg>';
   function renderLogin() {
     const err = B.authError ? '<div class="warn-box">' + esc(B.authError.message || B.authError.code) + '</div>' : '';
-    $('#root').innerHTML = '<div class="hero"><div class="logos"><img class="big" src="icons/logo-full.png" alt="Mae Sot Musicology"></div><h1>' + esc(C.appFull) + '</h1><p>' + esc(C.course.code) + ' ' + esc(C.course.name) + ' · ' + esc(C.course.school) + '</p></div>' +
-      '<div class="card login-card">' + err + '<button class="gbtn" data-act="login">' + GSVG + 'เข้าสู่ระบบด้วย Google</button>' +
-      '<div class="muted" style="text-align:center;margin-top:6px">ระบบพาไปหน้าที่ถูกต้องให้อัตโนมัติ — นักเรียน → แอปของกลุ่ม · ครู → ศูนย์กลาง</div>' +
-      '<ol class="steps"><li>นักเรียนใช้อีเมลโรงเรียน <b>รหัสนักเรียน@' + esc(C.auth.domain) + '</b></li><li>ระบบผูกบัญชีกับรายชื่อที่ครูนำเข้า — ใช้บัญชีเพื่อนแทนไม่ได้ และทุกการบันทึกจะแสดงชื่อผู้บันทึก</li><li>ครูจัดกลุ่มให้ แล้วสมาชิกบันทึกข้อมูลร่วมกันได้ทันที</li></ol>' +
-      (B.mode === 'demo' ? '<div class="tip" style="margin-top:12px">🧪 <b>โหมดทดลอง</b> — ข้อมูลสาธิตอยู่ในเบราว์เซอร์นี้เท่านั้น เลือกเป็นครูหรือนักเรียนก็ได้ เปิดหลายแท็บเพื่อจำลองสมาชิกหลายคน' + (B.realConfigured() ? ' · <a href="index.html?demo=0">กลับไปข้อมูลจริง</a>' : '') + '</div>' : '<div style="text-align:center;margin-top:12px"><a class="btn sm ghost" href="index.html?demo=1">🧪 ทดลองใช้ด้วยข้อมูลสาธิต (ไม่ต้องล็อกอินจริง)</a></div>') +
-      '</div>' + M.copyrightHTML();
+    const tmode = route().a === 'teacher'; const demo = B.mode === 'demo';
+    const hero = '<div class="hero"><div class="logos"><img class="big" src="icons/logo-full.png" alt="Mae Sot Musicology"></div><h1>' + esc(C.appFull) + '</h1><p>' + esc(C.course.code) + ' ' + esc(C.course.name) + ' · ' + esc(C.course.school) + '</p></div>';
+    if (demo) {
+      $('#root').innerHTML = hero + '<div class="card login-card"><div class="demo-strip" style="border-radius:12px;margin-bottom:12px">🧪 โหมดทดลองของครู (ข้อมูลสาธิต ไม่กระทบข้อมูลจริง)</div>' +
+        '<button class="gbtn" data-act="login">🧪 เลือกบัญชีทดลอง (ครู หรือ นักเรียน)</button>' + (B.realConfigured() ? '<a class="btn sec block" style="margin-top:10px" href="index.html?demo=0">ออกจากโหมดทดลอง</a>' : '') + '</div>' + M.copyrightHTML();
+      return;
+    }
+    if (tmode) {
+      $('#root').innerHTML = hero + '<div class="card login-card">' + err + '<div class="card-title">👩‍🏫 เข้าสู่ระบบสำหรับครู</div>' +
+        '<button class="gbtn" data-act="tlogin">' + GSVG + 'เข้าสู่ระบบครูด้วย Google</button>' +
+        '<div class="muted" style="margin-top:8px">เมื่อเข้าแล้วจะพบ “ศูนย์กลางครู” — แผงควบคุม ดูแอปในมุมมองนักเรียน และโหมดทดลอง</div>' +
+        '<a class="btn ghost block" style="margin-top:10px" href="#/home">‹ กลับไปหน้าเข้าสู่ระบบนักเรียน</a></div>' + M.copyrightHTML();
+      return;
+    }
+    $('#root').innerHTML = hero + '<div class="card login-card">' + err +
+      '<button class="gbtn big" data-act="login">' + GSVG + '<span>นักเรียนเข้าสู่ระบบ<small>ด้วยอีเมล รหัสนักเรียน@' + esc(C.auth.domain) + '</small></span></button>' +
+      '<ol class="steps"><li>กดปุ่มด้านบน แล้วเลือกบัญชีโรงเรียนของตัวเอง</li><li>ระบบพาเข้ากลุ่มที่ครูจัดไว้ให้ทันที</li><li>ลงพื้นที่ บันทึก ถ่ายภาพ อัดเสียง ร่วมกับเพื่อนได้เลย 🎶</li></ol>' +
+      '</div><div class="teacher-link"><a href="#/teacher">👩‍🏫 สำหรับครู</a></div>' + M.copyrightHTML();
   }
   function renderBlocked(title, msg, extra) {
     $('#root').innerHTML = '<div class="hero"><div class="logos"><img class="big" src="icons/logo-full.png" alt=""></div></div><div class="card login-card"><h3>⚠ ' + esc(title) + '</h3><p class="muted">' + esc(msg) + '</p>' + (extra || '') + '<button class="btn sec block" style="margin-top:8px" data-act="logout">ออกจากระบบ / เปลี่ยนบัญชี</button></div>' + M.copyrightHTML();
@@ -349,7 +362,9 @@
     const rec = kind === 'reflection' ? ((D.personal && D.personal.reflection) || {}) : ((D.docs && D.docs[kind]) || {});
     CUR = { kind, single: true, path: kind === 'reflection' ? 'personal/' + ME.sid + '/reflection' : 'docs/' + GID + '/' + kind };
     let extra = '';
-    if (kind === 'report') extra = '<div class="card"><div class="card-title">📤 ส่งออกรายงานกลุ่ม</div><div class="muted" style="margin-bottom:8px">รวมข้อมูลของทุกคนในกลุ่ม พร้อมชื่อผู้บันทึก ตาราง “ประมวลผลกลาง” และภาคผนวกสะท้อนคิดของคุณ (ผู้ให้ข้อมูลที่ไม่ยินยอมให้ระบุชื่อจะถูกซ่อน)</div>' +
+    if (kind === 'report') extra = '<div class="card ac-card"><div class="card-title">📑 รายงานวิชาการอัตโนมัติ</div><div class="muted" style="margin-bottom:8px">ระบบเรียบเรียงข้อมูลที่ทุกคนในกลุ่มบันทึก เป็นรายงานการศึกษาค้นคว้า 5 บท ตามรูปแบบวิชาการ (ปก คำนำ สารบัญ บทนำ แนวคิด วิธีการ ผลการศึกษา สรุปอภิปรายผล บรรณานุกรม ภาคผนวก) — ตรวจทานและเรียบเรียงภาษาก่อนส่ง</div>' +
+      '<div class="row wrap"><button class="btn gold grow" data-act="acdocx">⬇ Word (.docx)</button><button class="btn grow" data-act="acpdf">⬇ PDF</button><button class="btn sec grow" data-act="acprev">👁 ดูตัวอย่าง</button></div><div id="acMsg" class="muted" style="margin-top:6px"></div></div>' +
+      '<div class="card"><div class="card-title">📤 ส่งออกสมุดบันทึกกลุ่ม</div><div class="muted" style="margin-bottom:8px">รวมข้อมูลของทุกคนในกลุ่ม พร้อมชื่อผู้บันทึก ตาราง “ประมวลผลกลาง” และภาคผนวกสะท้อนคิดของคุณ (ผู้ให้ข้อมูลที่ไม่ยินยอมให้ระบุชื่อจะถูกซ่อน)</div>' +
       '<div class="row wrap"><button class="btn grow" data-act="preview">👁 ดูตัวอย่าง</button><button class="btn gold grow" data-act="pdf">⬇ PDF</button></div><div class="row wrap" style="margin-top:8px"><button class="btn sec grow" data-act="png">🖼 ภาพ PNG ทุกหน้า</button><button class="btn sec grow" data-act="print">🖨 พิมพ์/บันทึก PDF</button></div>' +
       '<button class="btn sec block" style="margin-top:8px" data-act="poster">🎨 โปสเตอร์ Padlet (PNG)</button><div id="exportMsg" class="muted" style="margin-top:6px"></div></div>';
     let peer = '';
@@ -510,7 +525,13 @@
     const ids = []; M.LIST_KINDS.forEach(k => M.listOf(G(), k).forEach(r => M.mediaIds(r).forEach(id => ids.push(id))));
     await ensureMedia(ids); const o = {}; ids.forEach(id => { if (MEDIA[id]) o[id] = MEDIA[id]; }); return o;
   }
-  async function reportCtx() { return { group: D.group, members: members(), media: await groupMediaMap(), events: eventsMap(), exporter: ME, personal: D.personal }; }
+  async function acRun(bt, fn) {
+    const old = bt.textContent, msg = $('#acMsg'); bt.disabled = true; bt.textContent = 'กำลังเรียบเรียง…';
+    try { await fn(await reportCtx()); if (msg) msg.textContent = 'สร้างรายงานเรียบร้อย ✓ (ตรวจทานภาษาและข้อมูลก่อนส่งครู)'; }
+    catch (er) { console.warn(er); if (msg) msg.textContent = 'สร้างไม่สำเร็จ: ' + (er.message || er) + (/load fail/.test(er.message || '') ? ' — ไฟล์ PDF ต้องมีอินเทอร์เน็ตครั้งแรก (ใช้ Word ได้แม้ออฟไลน์)' : ''); }
+    bt.disabled = false; bt.textContent = old;
+  }
+  async function reportCtx() { return { gid: GID, group: D.group, members: members(), media: await groupMediaMap(), events: eventsMap(), exporter: ME, personal: D.personal }; }
   const fileBase = () => ('รายงานดนตรีแม่สอด-' + D.group.room.replace('/', '-') + '-' + D.group.name).replace(/[\\/:*?"<>|\s]+/g, '_');
   async function exportWith(bt, fn) {
     const old = bt.textContent; bt.disabled = true; const msg = $('#exportMsg');
@@ -520,7 +541,9 @@
   }
 
   const ACTIONS = {
-    login: async () => { try { B.authError = null; await B.signIn({}); } catch (er) { B.authError = er; renderLogin(); } },
+    tlogin: async () => { try { B.authError = null; await B.signIn({}); } catch (er) { B.authError = er; renderLogin(); } },
+    godemo: bt => { try { sessionStorage.setItem('mcm5_demo_ok', '1'); } catch (er) { /* ignore */ } location.href = bt.dataset.to; },
+    login: async () => { try { B.authError = null; await B.signIn(B.mode === 'demo' ? {} : { hd: C.auth.domain }); } catch (er) { B.authError = er; renderLogin(); } },
     logout: async () => { flushAll(); sessionStorage.removeItem('mcm5_viewas'); await B.signOut(); location.hash = '#/home'; },
     hub: () => { sessionStorage.removeItem('mcm5_viewas'); location.hash = '#/hub'; onAuth(USER); },
     hubview: () => { sessionStorage.removeItem('mcm5_viewas'); location.hash = '#/hub/groups'; onAuth(USER); },
@@ -575,6 +598,9 @@
     retry: async () => { await B.retryFailed(); render(true); },
     backup: async () => { const media = await groupMediaMap(); M.saveJSON({ app: 'mcm5g', v: 2, exportedAt: Date.now(), by: me(), gid: GID, group: D.group, records: D.records, docs: D.docs, history: D.history, personal: { [ME.sid]: D.personal }, media }, 'สำรอง-กลุ่ม-' + (D.group ? D.group.name : 'x') + '-' + M.today() + '.json'); },
     dlsnap: async bt => { const s = (await B.snapshots('g:' + GID)).find(x => x.id === bt.dataset.id); if (s) M.saveJSON({ app: 'mcm5g-snap', v: 2, gid: GID, at: s.at, data: s.data }, 'สำเนา-' + GID + '-' + s.at + '.json'); },
+    acdocx: async bt => acRun(bt, ctx => REPORT.exportDocx(G(), ctx)),
+    acpdf: async bt => acRun(bt, ctx => REPORT.exportPdf(G(), ctx, (i, n) => { bt.textContent = 'หน้า ' + i + '/' + n + '…'; })),
+    acprev: async bt => acRun(bt, async ctx => REPORT.preview(G(), ctx)),
     preview: async () => M.previewPages(M.buildPages(G(), await reportCtx())),
     pdf: bt => exportWith(bt, (root, prog) => M.exportPDF(root, fileBase() + '.pdf', prog)),
     png: bt => exportWith(bt, (root, prog) => M.exportPNGs(root, fileBase(), prog)),
@@ -587,7 +613,7 @@
   };
 
   /* ---------- start ---------- */
-  window.addEventListener('hashchange', () => { flushAll(); render(); });
+  window.addEventListener('hashchange', () => { flushAll(); if (!USER) renderLogin(); else render(); });
   window.addEventListener('pagehide', flushAll);
   document.addEventListener('visibilitychange', () => { if (document.hidden) flushAll(); });
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
