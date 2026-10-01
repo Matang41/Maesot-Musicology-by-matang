@@ -46,7 +46,7 @@
   function sub(path, fn) { subs.push(B.on(path, v => { fn(v); schedule(); }, e => toast('อ่านข้อมูลไม่ได้ (' + path + '): ' + (e.code || e.message), 4000))); }
   function startData() {
     sub('roster', v => D.roster = v || {}); sub('groups', v => D.groups = v || {}); sub('memberOf', v => D.memberOf = v || {});
-    sub('calendar', v => D.calendar = v || {}); sub('grades', v => D.grades = Object.assign({ groups: {}, students: {} }, v || {})); sub('config', v => D.config = v || {});
+    sub('calendar', v => D.calendar = v || {}); needRecords(); sub('grades', v => D.grades = Object.assign({ groups: {}, students: {} }, v || {})); sub('config', v => { D.config = v || {}; M.applyInfo(D.config); }); sub('tcomments', v => D.tc = v || {});
   }
   function needRecords() { if (D.records !== null) return; D.records = {}; sub('records', v => D.records = v || {}); }
   function openGroup(gid) {
@@ -55,14 +55,14 @@
     ['records', 'docs', 'history'].forEach(k => gsubs.push(B.on(k + '/' + gid, v => { D.gdata[gid][k] = v || {}; schedule(); })));
     memList(D.groups[gid]).forEach(m => gsubs.push(B.on('personal/' + m.sid, v => { D.personal[m.sid] = v || {}; schedule(); })));
   }
-  let rT = null, DRAGGING = false; function schedule() { if (DRAGGING) return; cancelAnimationFrame(rT); rT = requestAnimationFrame(() => render(true)); }
+  let rT = null, DRAGGING = false; function schedule() { if (DRAGGING || V.tab === 'listen' || V.tab === 'map') return; cancelAnimationFrame(rT); rT = requestAnimationFrame(() => render(true)); }
 
   /* ---------- shell ---------- */
-  const TABS = [['dash', '📋 ภาพรวม'], ['roster', '🧾 จัดการรายชื่อ'], ['groups', '👥 จัดกลุ่ม'], ['cal', '🗓 ปฏิทิน'], ['grade', '✅ ตรวจงาน'], ['scores', '📤 คะแนน/ส่งออก'], ['backup', '🛟 สำรอง/กู้คืน']];
+  const TABS = [['dash', '📋 ภาพรวม'], ['roster', '🧾 จัดการรายชื่อ'], ['groups', '👥 จัดกลุ่ม'], ['cal', '🗓 ปฏิทิน'], ['grade', '✅ ตรวจงาน'], ['map', '🗺 แผนที่'], ['listen', '🎧 ห้องฟัง'], ['scores', '📤 คะแนน/ส่งออก'], ['backup', '⚙ ตั้งค่า/สำรอง']];
   function badge() { if (B.mode === 'demo') return ['off', '🧪 โหมดสาธิต']; if (STATUS.failed) return ['err', '⚠ ส่งไม่สำเร็จ ' + STATUS.failed]; if (!STATUS.online) return ['pend', '📴 ออฟไลน์']; if (STATUS.pending) return ['pend', '⏫ ' + STATUS.pending]; return ['ok', '☁️ ซิงก์แล้ว']; }
   function shell(inner) {
     const [bc, bt] = badge(); const prop = Object.values(D.calendar || {}).filter(e => e.status === 'proposed').length;
-    return '<header class="topbar"><img class="logo" src="icons/logo-mark-512.png" alt=""><h1>แผงควบคุมครู · ' + esc(C.appName) + '</h1><a class="sync" href="index.html#/hub">🏠 ศูนย์กลาง</a><a class="sync" href="index.html#/hub/groups">👀 มุมมองนักเรียน</a><span class="sync ' + bc + '">' + bt + '</span>' + (USER ? '<span class="muted" style="color:#ddd6fe">' + esc(USER.email) + '</span><button class="sync" data-act="logout">ออก</button>' : '') + '</header>' +
+    return '<header class="topbar"><img class="logo" src="icons/logo-mark-512.png" alt=""><h1>แผงควบคุมครู · ' + esc(C.appName) + '</h1>' + (USER ? (() => { const n = tNotifs().length; return '<button class="sync' + (n ? ' pend' : '') + '" data-tbell>🔔 ' + n + '</button>'; })() : '') + '<a class="sync" href="index.html#/hub">🏠 ศูนย์กลาง</a><a class="sync" href="index.html#/hub/groups">👀 มุมมองนักเรียน</a><span class="sync ' + bc + '">' + bt + '</span>' + (USER ? '<span class="muted" style="color:#ddd6fe">' + esc(USER.email) + '</span><button class="sync" data-act="logout">ออก</button>' : '') + '</header>' +
       (B.mode === 'demo' ? '<div class="demo-strip">🧪 โหมดทดลอง (ข้อมูลสาธิต ไม่กระทบข้อมูลจริง)' + (B.realConfigured() ? ' · <a href="teacher.html?demo=0">กลับไปข้อมูลจริง</a>' : '') + '</div>' : '') +
       '<div class="t-wrap"><div class="seg ttabs">' + TABS.map(t => '<button data-tab="' + t[0] + '" class="' + (V.tab === t[0] ? 'on' : '') + '">' + t[1] + (t[0] === 'cal' && prop ? ' <b class="tag gold">' + prop + '</b>' : '') + '</button>').join('') + '</div>' + inner + M.copyrightHTML() + '</div>';
   }
@@ -244,11 +244,63 @@
     const mm = mediaFor(gid); const ids = []; recs.forEach(r => M.mediaIds(r).forEach(id => { if (!mm[id] && !TRIED.has(gid + id)) { ids.push(id); TRIED.add(gid + id); } }));
     if (!ids.length) return; await Promise.all(ids.map(async id => { const m = await B.getMedia(gid, id); if (m) mm[id] = m; })); render(true);
   }
+  const modeSw = () => '<div class="seg" style="max-width:520px;margin-bottom:10px"><button data-gmode="group" class="' + (V.gmode !== 'task' ? 'on' : '') + '">👥 ตรวจทีละกลุ่ม</button><button data-gmode="task" class="' + (V.gmode === 'task' ? 'on' : '') + '">⚡ ตรวจทีละงานทั้งห้อง</button></div>';
+  function tcBox(gid, rid, kind) { const c = ((D.tc || {})[gid] || {})[rid]; return '<div class="tcbox"><label>💬 คอมเมนต์ถึงกลุ่ม (นักเรียนเห็นทันที)' + (c ? ' <span class="muted">· ' + esc(thDateTime(c.at)) + '</span>' : '') + '</label><textarea class="tc" rows="2" data-gid="' + esc(gid) + '" data-rid="' + esc(rid) + '" data-kind="' + esc(kind) + '" placeholder="เช่น ดีมาก เพิ่มรายละเอียดจังหวะอีกนิด">' + esc(c ? c.text : '') + '</textarea></div>'; }
+  function tNotifs() {
+    const out = []; let seen = 0; try { seen = +localStorage.getItem('mcm5_t_seen') || 0; } catch (e) { /* ignore */ }
+    Object.keys(D.calendar || {}).forEach(id => { const e = D.calendar[id]; if (e.status === 'proposed') out.push({ ic: '🗓', t: 'คำขอลงพื้นที่: ' + e.title + ' (' + thDate(e.date) + ')', tab: 'cal', at: e.createdAt }); });
+    Object.keys(D.groups || {}).forEach(gid => { const g = D.groups[gid]; const gg = ((D.grades.groups || {})[gid] || {}).tasks || {};
+      Object.keys(g.flags || {}).forEach(tid => { const f = g.flags[tid]; if (f && !(gg[tid] && gg[tid].s != null) && taskById(tid)) out.push({ ic: '✋', t: g.name + ' (ม.' + g.room + ') แจ้งว่า “' + taskById(tid).name + '” เสร็จแล้ว — รอตรวจ', gid, tid, at: f.at }); }); });
+    if (D.records) Object.keys(D.records).forEach(gid => { let n = 0, last = 0; Object.values(D.records[gid] || {}).forEach(k => Object.values(k || {}).forEach(r => { if ((r.updatedAt || 0) > seen) { n++; last = Math.max(last, r.updatedAt); } })); if (n && D.groups[gid]) out.push({ ic: '📝', t: D.groups[gid].name + ' (ม.' + D.groups[gid].room + ') บันทึก/แก้ไขใหม่ ' + n + ' รายการ', gid, at: last }); });
+    return out.sort((a, b) => (b.at || 0) - (a.at || 0));
+  }
+  function teacherBell() {
+    const list = tNotifs();
+    modal('<h3>🔔 การแจ้งเตือน</h3>' + (list.length ? '<ul class="feed">' + list.map(n => '<li><span style="font-size:1.3rem">' + n.ic + '</span><div class="grow">' + esc(n.t) + '<div class="muted" style="font-size:.74rem">' + esc(ago(n.at)) + '</div></div>' + (n.tab ? '<button class="btn xs sec" data-tab="' + n.tab + '" data-close>ไปดู</button>' : '<button class="btn xs gold" data-opengroup="' + esc(n.gid) + '"' + (n.tid ? ' data-tid="' + n.tid + '"' : '') + ' data-close>ตรวจ</button>') + '</li>').join('') + '</ul>' : '<div class="empty">ไม่มีอะไรค้าง 🎉</div>') + '<button class="btn sec block" style="margin-top:10px" data-close>ปิด</button>', { center: true });
+    try { localStorage.setItem('mcm5_t_seen', Date.now()); } catch (e) { /* ignore */ }
+  }
+  function mapPts() { needRecords(); const pts = []; groupsOf(V.room).forEach(g => EXTRAS.pointsFrom({ records: (D.records || {})[g.gid] || {} }, g.name).forEach(p => pts.push(p))); return pts; }
+  function viewMapT() { const pts = mapPts(); return shell('<div class="toolbar"><div class="f"><label>ห้อง</label>' + roomSel('v_room') + '</div><div class="grow"></div></div><div class="card"><div class="card-title">🗺 แผนที่ดนตรีพหุวัฒนธรรมแม่สอด · ม.' + esc(V.room) + '</div><div class="muted">' + pts.length + ' จุดจากทุกกลุ่ม · ใช้เปิดบนจอในห้องเรียน/Gallery Walk ได้</div>' + EXTRAS.legendHTML(pts) + '<div id="mapEl" class="map-box tall"></div></div>'); }
+  const LCACHE_T = {}; let LISTEN_T = [];
+  async function viewListenT() {
+    needRecords(); const cands = []; groupsOf(V.room).forEach(g => EXTRAS.audioCandidates({ records: (D.records || {})[g.gid] || {} }, g.gid, g.name).forEach(a => cands.push(a)));
+    LISTEN_T = await EXTRAS.resolveAudio(cands, B.getMedia, LCACHE_T);
+    return shell('<div class="toolbar"><div class="f"><label>ห้อง</label>' + roomSel('v_room') + '</div><div class="grow"></div><span class="muted">รวมเสียงจากทุกกลุ่ม · เหมาะสำหรับกิจกรรมหูทิพย์หน้าชั้น</span></div><div id="listenRoot">' + EXTRAS.listenHTML(LISTEN_T) + '</div>');
+  }
+  function needDocs() { if (D.docsAll) return; D.docsAll = {}; sub('docs', v => D.docsAll = v || {}); }
+  function needPersonal() { if (D.personalAll) return; D.personalAll = true; sub('personal', v => { D.personal = v || {}; }); }
+  function viewGradeTask() {
+    needRecords(); needDocs(); needPersonal();
+    const t = taskById(V.tid), kind = M.KIND_OF_TASK[V.tid], F = FORMS[kind], gs = groupsOf(V.room);
+    const tabs = '<div class="tabs">' + C.tasks.map(x => '<button data-ttab="' + x.id + '" class="' + (x.id === V.tid ? 'on' : '') + '">' + x.icon + ' ' + esc(x.name.split(' ')[0]) + '</button>').join('') + '</div>';
+    const head = '<div class="toolbar"><div class="f"><label>ห้อง</label>' + roomSel('v_room') + '</div><div class="grow"></div></div>' + modeSw() + tabs +
+      '<div class="card"><b>' + t.icon + ' ' + esc(t.name) + '</b> <span class="muted">' + esc(t.indicator) + ' · เต็ม ' + maxOf(t) + ' · ' + (t.scope === 'group' ? gs.length + ' กลุ่ม' : 'รายบุคคล') + '</span><div class="hint">กดระดับ K-P-A ได้ทันที คะแนนคำนวณอัตโนมัติ · เปิด “ดูงาน” เพื่ออ่านรายละเอียดและคอมเมนต์รายรายการ</div></div>';
+    if (t.scope === 'individual') {
+      const stu = rosterOf(V.room); needPersonal();
+      return shell(head + stu.map(s => { const p = D.personal[s.sid] || {}, rf = p.reflection || {}, sg = (D.grades.students || {})[s.sid] || {}, e = (sg.tasks && sg.tasks[t.id]) || {}; const g = D.groups[D.memberOf[s.sid]];
+        return '<div class="card tcard"><div class="row"><b class="grow">' + esc(s.no) + '. ' + esc(s.name) + ' <span class="muted">' + esc(g ? g.name : 'ไม่มีกลุ่ม') + '</span></b>' + (p.flags && p.flags.t7 ? '<span class="tag st-ok">● ส่งแล้ว</span>' : (M.filled(rf) ? '<span class="tag">เขียนแล้ว</span>' : '<span class="tag st-cancel">ยังไม่เขียน</span>')) + '<span class="big-score sm">' + (e.s != null ? e.s : '–') + '</span></div>' +
+          (M.filled(rf) ? '<details' + (V.open && V.open.has('s' + s.sid) ? ' open' : '') + ' data-det="s' + s.sid + '"><summary>อ่านสะท้อนคิด</summary>' + M.renderRecord('reflection', rf, {}, {}) + '</details>' : '') +
+          '<div class="tgrid">' + t.criteria.map(c => rubricRow(c, e.r || {}, 'data-irub data-sid="' + s.sid + '"')).join('') + '</div><div class="row"><input type="number" step="0.5" class="is" data-sid="' + s.sid + '" value="' + (e.s != null ? e.s : '') + '" placeholder="คะแนน" style="width:110px"><textarea class="ic grow" rows="1" data-sid="' + s.sid + '" placeholder="ความเห็น">' + esc(e.c || '') + '</textarea></div></div>'; }).join(''));
+    }
+    return shell(head + (gs.length ? gs.map(g => {
+      const gd = { records: (D.records || {})[g.gid] || {}, docs: (D.docsAll || {})[g.gid] || {} }; const e = (((D.grades.groups || {})[g.gid] || {}).tasks || {})[t.id] || {};
+      const p = M.taskProgress(t, gd, null); const fl = g.flags && g.flags[t.id]; const media = mediaFor(g.gid); const isOpen = V.open && V.open.has(g.gid);
+      let body = '';
+      if (isOpen) {
+        if (F.single) { const doc = gd.docs[kind] || {}; body = M.filled(doc) ? M.renderRecord(kind, doc, media, { showBy: true }) + tcBox(g.gid, kind, kind) : '<div class="muted">ยังไม่มีข้อมูล</div>'; }
+        else { const list = M.listOf(gd, kind); body = list.length ? list.map((r, i) => { const s = F.summary(r); return '<div class="sub-rec"><div class="rec-t">' + (i + 1) + '. ' + esc(s.t) + '</div><div class="rec-s">' + esc(s.s) + '</div>' + M.metaHTML(r) + M.renderRecord(kind, r, media, {}) + tcBox(g.gid, r.id, kind) + '</div>'; }).join('') : '<div class="muted">ยังไม่มีรายการ</div>'; loadMedia(g.gid, list); }
+      }
+      return '<div class="card tcard"><div class="row"><b class="grow">' + esc(g.name) + ' <span class="muted">(' + Object.keys(g.members || {}).length + ' คน)</span></b>' + (fl ? '<span class="tag st-ok">● แจ้งเสร็จ</span>' : '') + (M.LIST_KINDS.includes(kind) ? '<span class="tag">' + p.n + '/' + p.min + ' รายการ</span>' : (p.done ? '<span class="tag">ครบ</span>' : '<span class="tag st-cancel">ยังไม่ครบ</span>')) + '<span class="big-score sm">' + (e.s != null ? e.s : '–') + '</span></div>' +
+        '<details' + (isOpen ? ' open' : '') + ' data-det="' + g.gid + '"><summary>📖 ดูงาน</summary>' + body + '</details>' +
+        '<div class="tgrid">' + t.criteria.map(c => rubricRow(c, e.r || {}, 'data-grub data-gid="' + g.gid + '"')).join('') + '</div><div class="row"><input type="number" step="0.5" class="gs" data-gid="' + g.gid + '" value="' + (e.s != null ? e.s : '') + '" placeholder="คะแนน" style="width:110px"><textarea class="gc grow" rows="1" data-gid="' + g.gid + '" placeholder="ความเห็นถึงกลุ่ม">' + esc(e.c || '') + '</textarea><button class="btn xs ghost" data-opengroup="' + g.gid + '">เปิดแบบละเอียด ›</button></div></div>';
+    }).join('') : '<div class="empty">ยังไม่มีกลุ่มในห้องนี้</div>'));
+  }
   function viewGrade() {
+    if (V.gmode === 'task') return viewGradeTask();
     const gs = groupsOf(V.room); if (V.gid && (!D.groups[V.gid] || D.groups[V.gid].room !== V.room)) V.gid = null;
     if (!V.gid && gs[0]) openGroup(gs[0].gid);
     const left = '<div class="toolbar"><div class="f"><label>ห้อง</label>' + roomSel('v_room') + '</div><div class="f grow"><label>กลุ่ม</label><select id="v_gid">' + gs.map(g => '<option value="' + g.gid + '"' + (g.gid === V.gid ? ' selected' : '') + '>' + esc(g.name) + ' (' + memList(g).length + ' คน)</option>').join('') + '</select></div><button class="btn sec" data-act="prevg">‹</button><button class="btn sec" data-act="nextg">›</button></div>';
-    if (!V.gid) return shell(left + '<div class="empty">ยังไม่มีกลุ่มในห้องนี้</div>');
+    if (!V.gid) return shell(left + modeSw() + '<div class="empty">ยังไม่มีกลุ่มในห้องนี้</div>');
     const g = Object.assign({ gid: V.gid }, D.groups[V.gid]), gd = D.gdata[V.gid] || { records: {}, docs: {}, history: {} }, ms = memList(g), sy = M.synth(gd, ms), t = taskById(V.tid);
     const gg = ((D.grades.groups || {})[V.gid] || {}).tasks || {};
     const tabs = '<div class="tabs">' + C.tasks.map(x => '<button data-ttab="' + x.id + '" class="' + (x.id === V.tid ? 'on' : '') + '">' + x.icon + ' ' + esc(x.name.split(' ')[0]) + (x.scope === 'group' ? (gg[x.id] && gg[x.id].s != null ? ' ✓' : '') : '') + (g.flags && g.flags[x.id] ? ' ●' : '') + '</button>').join('') + '</div>';
@@ -257,15 +309,15 @@
     if (kind === 'reflection') {
       content += ms.map(m => { const p = D.personal[m.sid] || {}; const rf = p.reflection || {}; return '<div class="card"><div class="row">' + avatar(m.name) + '<b class="grow">' + esc(m.name) + '</b>' + (p.flags && p.flags.t7 ? '<span class="tag st-ok">● ส่งแล้ว</span>' : '') + '</div>' + (M.filled(rf) ? M.renderRecord('reflection', rf, {}, {}) : '<div class="muted">ยังไม่ได้เขียน</div>') + '</div>'; }).join('');
     } else if (F.single) {
-      const doc = (gd.docs || {})[kind] || {}; content += M.filled(doc) ? '<div class="card">' + M.renderRecord(kind, doc, media, { showBy: true }) + '</div>' : '<div class="empty">ยังไม่มีข้อมูล</div>';
+      const doc = (gd.docs || {})[kind] || {}; content += M.filled(doc) ? '<div class="card">' + M.renderRecord(kind, doc, media, { showBy: true }) + tcBox(V.gid, kind, kind) + '</div>' : '<div class="empty">ยังไม่มีข้อมูล</div>';
       if (kind === 'report') content += '<div class="card"><div class="card-title">📑 รายงานวิชาการอัตโนมัติ</div><div class="row wrap" style="margin-bottom:10px"><button class="btn gold" data-act="gacdocx">⬇ Word (.docx)</button><button class="btn" data-act="gacpdf">⬇ PDF</button><button class="btn sec" data-act="gacprev">👁 ดูตัวอย่าง</button></div><div class="card-title">📒 สมุดบันทึกกลุ่ม</div><button class="btn" data-act="gpdf">⬇ รายงานกลุ่ม PDF</button> <button class="btn sec" data-act="gpreview">👁 ดูตัวอย่าง</button> <button class="btn sec" data-act="gposter">🎨 โปสเตอร์</button></div>';
     } else {
       const all = M.listOf(gd, kind, true), list = all.filter(r => !r.deleted), del = all.filter(r => r.deleted);
-      content += list.length ? list.map((r, i) => { const s = F.summary(r), c = M.commObj(r); return '<div class="card" style="border-left:5px solid ' + (c ? c.color : 'var(--p200)') + '"><div class="rec-t">' + (c ? c.emoji + ' ' : '') + (i + 1) + '. ' + esc(s.t) + '</div><div class="rec-s">' + esc(s.s) + '</div>' + M.metaHTML(r) + M.renderRecord(kind, r, media, { events: ev }) + '</div>'; }).join('') : '<div class="empty">ยังไม่มีรายการ</div>';
+      content += list.length ? list.map((r, i) => { const s = F.summary(r), c = M.commObj(r); return '<div class="card" style="border-left:5px solid ' + (c ? c.color : 'var(--p200)') + '"><div class="rec-t">' + (c ? c.emoji + ' ' : '') + (i + 1) + '. ' + esc(s.t) + '</div><div class="rec-s">' + esc(s.s) + '</div>' + M.metaHTML(r) + M.renderRecord(kind, r, media, { events: ev }) + tcBox(V.gid, r.id, kind) + '</div>'; }).join('') : '<div class="empty">ยังไม่มีรายการ</div>';
       if (del.length) content += '<details class="card"><summary>🗑 รายการที่ถูกลบ (' + del.length + ')</summary>' + del.map(r => '<div class="row" style="padding:6px 0"><span class="grow">' + esc(F.summary(r).t) + ' <span class="muted">ลบโดย ' + esc(short((r.deletedBy || {}).name)) + ' ' + esc(thDateTime(r.deletedAt)) + '</span></span><button class="btn xs gold" data-act="trestore" data-kind="' + kind + '" data-id="' + r.id + '">กู้คืน</button></div>').join('') + '</details>';
       loadMedia(V.gid, list);
     }
-    return shell(left + '<div class="row" style="margin:4px 0 8px"><h2 class="grow" style="margin:0">' + esc(g.name) + ' <span class="muted">ม.' + esc(g.room) + '</span></h2><button class="btn sm sec" data-act="synthview">🧩 ประมวลผลกลาง</button><a class="btn sm gold" href="index.html?as=' + esc(V.gid) + '">👀 มุมมองนักเรียนของกลุ่มนี้</a></div>' + tabs +
+    return shell(left + modeSw() + '<div class="row" style="margin:4px 0 8px"><h2 class="grow" style="margin:0">' + esc(g.name) + ' <span class="muted">ม.' + esc(g.room) + '</span></h2><button class="btn sm sec" data-act="synthview">🧩 ประมวลผลกลาง</button><a class="btn sm gold" href="index.html?as=' + esc(V.gid) + '">👀 มุมมองนักเรียนของกลุ่มนี้</a></div>' + tabs +
       '<div class="detail"><div>' + content + '</div><div class="grade-panel">' + gradePanel(g, ms, sy, t) + '</div></div>');
   }
   function rubricRow(c, r, attr) { return '<div class="f"><div class="lab">' + c.k + ' · ' + esc(c.name) + '</div><div class="rub">' + C.levels.map(l => '<button ' + attr + ' data-k="' + c.k + '" data-v="' + l.v + '" class="' + (r[c.k] === l.v ? 'on' : '') + '"><b>' + l.v + '</b>' + l.en + '</button>').join('') + '</div></div>'; }
@@ -289,21 +341,21 @@
   function synthModal() {
     const g = D.groups[V.gid], gd = D.gdata[V.gid] || {}, ms = memList(g), sy = M.synth(gd, ms);
     modal('<div class="row"><h3 class="grow">🧩 ประมวลผลกลาง: ' + esc(g.name) + '</h3><button class="btn sm" data-close>ปิด</button></div>' +
-      '<div class="card-title">การมีส่วนร่วม (จากประวัติการบันทึก)</div><table class="mini"><tr><th>สมาชิก</th><th>สร้าง</th><th>แก้ไข</th><th>แนบสื่อ</th><th>สัดส่วน</th><th>ล่าสุด</th></tr>' + sy.contrib.map(x => '<tr><td>' + esc(x.name) + '</td><td>' + (x.create || 0) + '</td><td>' + (x.edit || 0) + '</td><td>' + (x.media || 0) + '</td><td>' + x.share + '%</td><td>' + esc(x.last ? ago(x.last) : '-') + '</td></tr>').join('') + '</table>' +
+      '<div class="card-title">การมีส่วนร่วม (จากประวัติการบันทึก)</div><table class="mini"><tr><th>สมาชิก</th><th>สร้าง</th><th>แก้ไข</th><th>แนบสื่อ</th><th>สัดส่วน</th><th>ล่าสุด</th><th>ตรา</th></tr>' + sy.contrib.map(x => '<tr><td>' + esc(x.name) + '</td><td>' + (x.create || 0) + '</td><td>' + (x.edit || 0) + '</td><td>' + (x.media || 0) + '</td><td>' + x.share + '%</td><td>' + esc(x.last ? ago(x.last) : '-') + '</td><td>' + EXTRAS.badgesHTML(EXTRAS.badges(gd, ms, x.sid, D.personal[x.sid]).filter(b => b.scope === 'me'), true) + '</td></tr>').join('') + '</table><div style="margin-top:6px">ตรากลุ่ม: ' + EXTRAS.badgesHTML(EXTRAS.badges(gd, ms, '', {}).filter(b => b.scope === 'group'), true) + '</div>' +
       '<div class="card-title" style="margin-top:14px">เครื่องดนตรีที่วิเคราะห์</div>' + (sy.instruments.length ? '<table class="mini"><tr><th>เครื่องดนตรี</th><th>ชุมชน</th><th>ประเภท</th><th>สีสันเสียง</th></tr>' + sy.instruments.map(r => '<tr><td>' + esc(r.inst) + '</td><td>' + esc(r.c ? r.c.name : '') + '</td><td>' + esc(r.classify) + '</td><td>' + esc(r.timbre) + '</td></tr>').join('') + '</table>' : '<div class="muted">-</div>') +
       '<div class="two-col"><div><div class="card-title" style="margin-top:14px">สีสันเสียง</div>' + M.barsHTML(sy.freq.timbre) + '</div><div><div class="card-title" style="margin-top:14px">หน้าที่ดนตรี</div>' + M.barsHTML(sy.freq.funcs) + '</div></div>', { center: true, wide: true });
   }
-  function setGroupGrade(field, k, v) {
-    const t = taskById(V.tid), path = 'grades/groups/' + V.gid; const cur = (((D.grades.groups || {})[V.gid] || {}).tasks || {})[t.id] || {}; const e = JSON.parse(JSON.stringify(cur));
+  function setGroupGrade(field, k, v, gid) {
+    gid = gid || V.gid; const t = taskById(V.tid), path = 'grades/groups/' + gid; const cur = (((D.grades.groups || {})[gid] || {}).tasks || {})[t.id] || {}; const e = JSON.parse(JSON.stringify(cur));
     if (field === 'r') { e.r = e.r || {}; e.r[k] = e.r[k] === v ? null : v; const s = rubricScore(t, e.r); if (s != null) e.s = s; }
     else if (field === 's') e.s = v === '' ? null : Math.max(0, Math.min(maxOf(t), +v));
     else if (field === 'c') e.c = v;
     e.at = Date.now();
-    D.grades.groups[V.gid] = D.grades.groups[V.gid] || {}; D.grades.groups[V.gid].tasks = D.grades.groups[V.gid].tasks || {}; D.grades.groups[V.gid].tasks[t.id] = e;
-    W(B.update(path, { room: D.groups[V.gid].room, ['tasks/' + t.id]: e })); pushFinal(memList(D.groups[V.gid]).map(m => m.sid)); render(true);
+    D.grades.groups[gid] = D.grades.groups[gid] || {}; D.grades.groups[gid].tasks = D.grades.groups[gid].tasks || {}; D.grades.groups[gid].tasks[t.id] = e;
+    W(B.update(path, { room: D.groups[gid].room, ['tasks/' + t.id]: e })); pushFinal(memList(D.groups[gid]).map(m => m.sid)); render(true);
   }
-  function setIndGrade(field, k, v) {
-    const t = taskById(V.tid), sid = V.sid; const sg = (D.grades.students || {})[sid] || {}; const e = JSON.parse(JSON.stringify((sg.tasks && sg.tasks[t.id]) || {}));
+  function setIndGrade(field, k, v, sid) {
+    sid = sid || V.sid; const t = taskById(V.tid); const sg = (D.grades.students || {})[sid] || {}; const e = JSON.parse(JSON.stringify((sg.tasks && sg.tasks[t.id]) || {}));
     if (field === 'r') { e.r = e.r || {}; e.r[k] = e.r[k] === v ? null : v; const s = rubricScore(t, e.r); if (s != null) e.s = s; }
     else if (field === 's') e.s = v === '' ? null : Math.max(0, Math.min(maxOf(t), +v)); else if (field === 'c') e.c = v;
     e.at = Date.now(); D.grades.students[sid] = Object.assign({}, sg, { tasks: Object.assign({}, sg.tasks, { [t.id]: e }) });
@@ -339,8 +391,11 @@
 
   /* ---------- สำรอง/กู้คืน ---------- */
   async function viewBackup() {
-    const failed = await B.failedOps();
-    return shell('<div class="card"><div class="card-title">💾 สำรองข้อมูลทั้งระบบ</div><div class="muted" style="margin-bottom:8px">ดาวน์โหลดรายชื่อ กลุ่ม บันทึกทั้งหมด ประวัติการแก้ไข สะท้อนคิด ปฏิทิน และคะแนน เป็นไฟล์ .json (แนะนำทุกสัปดาห์)</div><div class="row wrap"><button class="btn gold" data-act="fullbackup" data-media="0">ดาวน์โหลด (ไม่รวมภาพ/เสียง)</button><button class="btn sec" data-act="fullbackup" data-media="1">ดาวน์โหลด (รวมภาพ/เสียง — ไฟล์ใหญ่)</button></div></div>' +
+    const failed = await B.failedOps(); const c = C.course;
+    const F = [['school', 'ชื่อโรงเรียน (เต็ม)'], ['department', 'กลุ่มสาระการเรียนรู้'], ['teacher', 'ชื่อ-นามสกุลครูผู้สอน (ใช้ในรายงาน)'], ['teacherPosition', 'ตำแหน่ง (เช่น ครูผู้ช่วย / ครู / ครูผู้สอน)'], ['code', 'รหัสวิชา'], ['name', 'ชื่อวิชา'], ['unit', 'หน่วยการเรียนรู้'], ['year', 'ปีการศึกษา'], ['semester', 'ภาคเรียน'], ['rooms', 'จำนวนห้อง ม.5']];
+    const info = '<div class="card gold"><div class="card-title">🏫 ข้อมูลส่วนกลาง</div><div class="muted" style="margin-bottom:8px">ใช้ในปกรายงานวิชาการ รายงานกลุ่ม โปสเตอร์ และหน้าแอปของนักเรียนทุกคน (ใช้ชื่อจริง–นามสกุลจริงสำหรับงานวิชาการ)</div>' +
+      '<div class="info-grid">' + F.map(f => '<div class="f"><label>' + esc(f[1]) + '</label><input type="text" data-info="' + f[0] + '" value="' + esc(c[f[0]] == null ? '' : c[f[0]]) + '"></div>').join('') + '</div><button class="btn gold" data-act="saveinfo">บันทึกข้อมูลส่วนกลาง</button></div>';
+    return shell(info + '<div class="card"><div class="card-title">💾 สำรองข้อมูลทั้งระบบ</div><div class="muted" style="margin-bottom:8px">ดาวน์โหลดรายชื่อ กลุ่ม บันทึกทั้งหมด ประวัติการแก้ไข สะท้อนคิด ปฏิทิน และคะแนน เป็นไฟล์ .json (แนะนำทุกสัปดาห์)</div><div class="row wrap"><button class="btn gold" data-act="fullbackup" data-media="0">ดาวน์โหลด (ไม่รวมภาพ/เสียง)</button><button class="btn sec" data-act="fullbackup" data-media="1">ดาวน์โหลด (รวมภาพ/เสียง — ไฟล์ใหญ่)</button></div></div>' +
       '<div class="card"><div class="card-title">↩ กู้คืนข้อมูลกลุ่มจากไฟล์</div><div class="muted" style="margin-bottom:8px">ใช้ไฟล์ “สำรองกลุ่ม” หรือ “สำเนา” ที่นักเรียนดาวน์โหลดจากแอป ระบบจะ <b>เพิ่มเฉพาะรายการที่หายไป หรือฉบับในไฟล์ใหม่กว่า</b> ไม่เขียนทับงานล่าสุด</div><input type="file" id="rs_file" accept=".json"></div>' +
       '<div class="card"><div class="card-title">สถานะการส่งข้อมูลของเครื่องนี้</div>รอส่ง ' + STATUS.pending + ' · ส่งไม่สำเร็จ ' + failed.length + (failed.length ? '<div class="warn-box" style="margin-top:6px">' + esc(failed[0].p) + ': ' + esc(failed[0].error) + '</div><button class="btn sm gold" data-act="retry">ลองส่งใหม่</button>' : '') + '</div>' +
       '<div class="card"><div class="card-title">⚙ คะแนนเต็มแต่ละงาน</div><button class="btn sec" data-act="settings">ตั้งค่าคะแนนเต็ม</button></div>' +
@@ -377,9 +432,9 @@
   async function render(keep) {
     if (!USER) return;
     const y = window.scrollY; let html;
-    if (V.tab === 'roster') html = viewRoster(); else if (V.tab === 'groups') html = viewGroups(); else if (V.tab === 'cal') html = viewCal(); else if (V.tab === 'grade') html = viewGrade(); else if (V.tab === 'scores') html = viewScores(); else if (V.tab === 'backup') html = await viewBackup(); else html = viewDash();
+    if (V.tab === 'roster') html = viewRoster(); else if (V.tab === 'groups') html = viewGroups(); else if (V.tab === 'cal') html = viewCal(); else if (V.tab === 'grade') html = viewGrade(); else if (V.tab === 'scores') html = viewScores(); else if (V.tab === 'backup') html = await viewBackup(); else if (V.tab === 'map') html = viewMapT(); else if (V.tab === 'listen') html = await viewListenT(); else html = viewDash();
     const act = document.activeElement; const actId = act && act.id; const selS = act && act.selectionStart;
-    $('#root').innerHTML = html; window.scrollTo(0, keep ? y : 0); if (V.tab === 'roster') initDrag();
+    $('#root').innerHTML = html; window.scrollTo(0, keep ? y : 0); if (V.tab === 'roster') initDrag(); if (V.tab === 'map') EXTRAS.renderMap($('#mapEl'), mapPts()); if (V.tab === 'listen') EXTRAS.bindListen($('#listenRoot'), LISTEN_T);
     if (actId && /^(g_c|i_c|g_s|i_s)$/.test(actId)) { const el = $('#' + actId); if (el) { el.focus(); try { el.setSelectionRange(selS, selS); } catch (er) { /* number input */ } } }
   }
   function renderLogin(msg) {
@@ -392,28 +447,34 @@
   document.addEventListener('click', async e => {
     const tb = e.target.closest('[data-tab]'); if (tb) { V.tab = tb.dataset.tab; render(); return; }
     const pk = e.target.closest('[data-pick]'); if (pk) { const s = pk.dataset.pick; if (V.sel.has(s)) V.sel.delete(s); else V.sel.add(s); render(true); return; }
-    const og = e.target.closest('[data-opengroup]'); if (og) { e.preventDefault(); V.tab = 'grade'; openGroup(og.dataset.opengroup); render(); return; }
+    const og = e.target.closest('[data-opengroup]'); if (og) { e.preventDefault(); V.tab = 'grade'; V.gmode = 'group'; if (og.dataset.tid) V.tid = og.dataset.tid; const gg = D.groups[og.dataset.opengroup]; if (gg) V.room = gg.room; openGroup(og.dataset.opengroup); render(); return; }
     const tt = e.target.closest('[data-ttab]'); if (tt) { V.tid = tt.dataset.ttab; render(true); return; }
-    const gr = e.target.closest('[data-grub]'); if (gr) { setGroupGrade('r', gr.dataset.k, +gr.dataset.v); return; }
-    const ir = e.target.closest('[data-irub]'); if (ir) { setIndGrade('r', ir.dataset.k, +ir.dataset.v); return; }
+    const gr = e.target.closest('[data-grub]'); if (gr) { setGroupGrade('r', gr.dataset.k, +gr.dataset.v, gr.dataset.gid); return; }
+    const ir = e.target.closest('[data-irub]'); if (ir) { setIndGrade('r', ir.dataset.k, +ir.dataset.v, ir.dataset.sid); return; }
+    const gm = e.target.closest('[data-gmode]'); if (gm) { V.gmode = gm.dataset.gmode; render(); return; }
+    const bell = e.target.closest('[data-tbell]'); if (bell) { teacherBell(); return; }
     const ps = e.target.closest('[data-pickstu]'); if (ps) { V.sid = ps.dataset.pickstu; render(true); return; }
     const dy = e.target.closest('[data-day]'); if (dy) { V.cal.sel = dy.dataset.day; render(true); return; }
     const cn = e.target.closest('[data-cal]'); if (cn) { V.cal.m += +cn.dataset.cal; if (V.cal.m < 0) { V.cal.m = 11; V.cal.y--; } if (V.cal.m > 11) { V.cal.m = 0; V.cal.y++; } render(true); return; }
     const img = e.target.closest('.thumbs img'); if (img) { const lb = document.createElement('div'); lb.className = 'lb'; lb.innerHTML = '<img src="' + img.src + '" alt="">'; lb.onclick = () => lb.remove(); document.body.appendChild(lb); return; }
     const bt = e.target.closest('[data-act]'); if (!bt) return; const a = bt.dataset.act; const A = ACTIONS[a]; if (A) { e.preventDefault(); await A(bt); }
   });
+  document.addEventListener('toggle', e => { const d = e.target; if (!d.matches || !d.matches('details[data-det]')) return; V.open = V.open || new Set(); const k = d.dataset.det; if (d.open) { if (!V.open.has(k)) { V.open.add(k); render(true); } } else V.open.delete(k); }, true);
   document.addEventListener('change', e => {
     const t = e.target;
     if (t.id === 'v_room') { V.room = t.value; V.sel.clear(); V.gid = null; render(); }
     else if (t.id === 'v_gid') { openGroup(t.value); render(); }
     else if (t.id === 'g_s') setGroupGrade('s', null, t.value); else if (t.id === 'g_c') setGroupGrade('c', null, t.value);
     else if (t.id === 'i_s') setIndGrade('s', null, t.value); else if (t.id === 'i_c') setIndGrade('c', null, t.value);
+    else if (t.matches('input.gs')) setGroupGrade('s', null, t.value, t.dataset.gid); else if (t.matches('textarea.gc')) setGroupGrade('c', null, t.value, t.dataset.gid);
+    else if (t.matches('input.is')) setIndGrade('s', null, t.value, t.dataset.sid); else if (t.matches('textarea.ic')) setIndGrade('c', null, t.value, t.dataset.sid);
+    else if (t.matches('textarea.tc')) { const v = t.value.trim(); W(B.set('tcomments/' + t.dataset.gid + '/' + t.dataset.rid, v ? { text: v, kind: t.dataset.kind, at: Date.now(), by: tMe() } : null)); toast(v ? 'ส่งคอมเมนต์ถึงกลุ่มแล้ว' : 'ลบคอมเมนต์แล้ว'); }
     else if (t.matches('input.adj')) { const v = t.value === '' ? null : +t.value; W(B.set('grades/students/' + t.dataset.sid + '/adj/' + V.tid, v)); const sg = D.grades.students[t.dataset.sid] = D.grades.students[t.dataset.sid] || {}; sg.adj = Object.assign({}, sg.adj, { [V.tid]: v }); pushFinal([t.dataset.sid]); render(true); }
     else if (t.id === 'rs_file' && t.files[0]) { restoreGroupFile(t.files[0]); t.value = ''; }
   });
 
   const ACTIONS = {
-    login: async () => { try { await B.signIn({ teacher: true }); } catch (er) { renderLogin(er.message || er.code); } },
+    login: async () => { try { await B.signIn({ teacher: true }); } catch (er) { renderLogin(B.authErrorText(er)); } },
     logout: async () => { await B.signOut(); },
     import: () => importModal(),
     radd: () => studentModal(null),
@@ -456,6 +517,7 @@
     exp: bt => doExport(bt.dataset.k),
     release: bt => { const on = bt.dataset.v === '1'; const stu = rosterOf(V.room); if (!confirm((on ? 'เผยแพร่' : 'ซ่อน') + 'คะแนนของนักเรียน ม.' + V.room + ' ' + stu.length + ' คน?')) return; const upd = {}; stu.forEach(s => upd['grades/students/' + s.sid + '/released'] = on); groupsOf(V.room).forEach(g => upd['grades/groups/' + g.gid + '/released'] = on); pushFinal(stu.map(s => s.sid)); W(B.update('', upd)); toast('เรียบร้อย'); },
     settings: () => settingsModal(),
+    saveinfo: () => { const o = {}; $$('[data-info]').forEach(i => o[i.dataset.info] = i.value.trim()); if (!o.teacher) { toast('กรอกชื่อครูผู้สอน'); return; } W(B.set('config/info', o)); M.applyInfo({ info: o }); toast('บันทึกข้อมูลส่วนกลางแล้ว — นักเรียนเห็นค่าใหม่ทันที'); },
     fullbackup: bt => fullBackup(bt.dataset.media === '1'),
     retry: async () => { await B.retryFailed(); render(true); },
     resetdemo: async () => { if (!confirm('ล้างข้อมูลสาธิตทั้งหมด?')) return; await B.resetDemo(); location.reload(); }

@@ -18,7 +18,7 @@
   const sentence = s => { s = clean(s); return s; };
   function dateRange(G) {
     const ds = []; M.LIST_KINDS.forEach(k => listOf(G, k).forEach(r => { if (r.date) ds.push(r.date); }));
-    ds.sort(); return ds.length ? (ds[0] === ds[ds.length - 1] ? 'วันที่ ' + thDate(ds[0], true) : 'ระหว่างวันที่ ' + thDate(ds[0], true) + ' ถึงวันที่ ' + thDate(ds[ds.length - 1], true)) : 'ภาคเรียนที่ 2 ปีการศึกษา ' + C.course.year;
+    ds.sort(); return ds.length ? (ds[0] === ds[ds.length - 1] ? 'วันที่ ' + thDate(ds[0], true) : 'ระหว่างวันที่ ' + thDate(ds[0], true) + ' ถึงวันที่ ' + thDate(ds[ds.length - 1], true)) : 'ภาคเรียนที่ ' + (C.course.semester || '2') + ' ปีการศึกษา ' + C.course.year;
   }
 
   function buildModel(G, ctx) {
@@ -40,12 +40,12 @@
 
     /* ---- ปก ---- */
     B.push({ t: 'cover', title, sub: 'รายงานการศึกษาค้นคว้า รายวิชา' + C.course.name.replace(/\s*ม\.\d/, '') + ' (' + C.course.code + ')', unit: C.course.unit, group: grp.name || '', room: grp.room || '',
-      members: mem.map(m => m.name + ' เลขที่ ' + m.no), school: C.course.school, teacher: C.course.teacher, year: C.course.year });
+      members: mem.map(m => m.name + ' เลขที่ ' + m.no), school: C.course.school, teacher: C.course.teacher, position: C.course.teacherPosition || '', dept: C.course.department || '', year: C.course.year, sem: C.course.semester || '2' });
 
     /* ---- คำนำ ---- */
     B.push({ t: 'front', text: 'คำนำ' });
     P('รายงานฉบับนี้เป็นส่วนหนึ่งของรายวิชา' + C.course.name + ' รหัสวิชา ' + C.course.code + ' ' + C.course.unit + ' จัดทำขึ้นเพื่อศึกษาองค์ประกอบของดนตรี บทบาทของดนตรีในสังคมและวัฒนธรรม และเสนอแนวทางการอนุรักษ์ดนตรีของ' + (commNames.length ? 'ชุมชน' + joinTH(commNames) : 'ชุมชนต่าง ๆ') + ' ในอำเภอแม่สอด จังหวัดตาก โดยคณะผู้จัดทำได้ลงพื้นที่เก็บข้อมูลจริง สังเกต สัมภาษณ์ผู้ให้ข้อมูล บันทึกภาพและเสียง แล้วนำมาวิเคราะห์และสังเคราะห์อย่างเป็นระบบ', { indent: true });
-    P('คณะผู้จัดทำขอขอบพระคุณผู้ให้ข้อมูลทุกท่านที่กรุณาสละเวลาถ่ายทอดความรู้ ขอบพระคุณ' + C.course.teacher + ' ที่ให้คำแนะนำตลอดการศึกษา และหวังเป็นอย่างยิ่งว่ารายงานฉบับนี้จะเป็นประโยชน์ต่อผู้ที่สนใจดนตรีพหุวัฒนธรรมและการอยู่ร่วมกันอย่างสันติในพื้นที่แม่สอด หากมีข้อผิดพลาดประการใด คณะผู้จัดทำขออภัยมา ณ ที่นี้', { indent: true });
+    P('คณะผู้จัดทำขอขอบพระคุณผู้ให้ข้อมูลทุกท่านที่กรุณาสละเวลาถ่ายทอดความรู้ ขอบพระคุณ' + C.course.teacher + ' ' + (C.course.teacherPosition || 'ครูผู้สอน') + ' ที่ให้คำแนะนำตลอดการศึกษา และหวังเป็นอย่างยิ่งว่ารายงานฉบับนี้จะเป็นประโยชน์ต่อผู้ที่สนใจดนตรีพหุวัฒนธรรมและการอยู่ร่วมกันอย่างสันติในพื้นที่แม่สอด หากมีข้อผิดพลาดประการใด คณะผู้จัดทำขออภัยมา ณ ที่นี้', { indent: true });
     B.push({ t: 'sign', lines: ['คณะผู้จัดทำ', grp.name || '', thDate(M.today(), true)] });
 
     /* ---- สารบัญ ---- */
@@ -241,8 +241,8 @@
         body += para(run(b.sub, { sz: 32 }), { jc: 'center' }) + para(run(b.unit, { sz: 28 }), { jc: 'center', spacing: 'w:after="600"' });
         body += para(run('จัดทำโดย', { b: 1, sz: 32 }), { jc: 'center' }) + para(run(b.group + (b.room ? '  ชั้นมัธยมศึกษาปีที่ ' + b.room : ''), { b: 1, sz: 32 }), { jc: 'center' });
         b.members.forEach(m => { body += para(run(m, { sz: 32 }), { jc: 'center', spacing: 'w:before="0" w:after="0"' }); });
-        body += para(run('เสนอ', { b: 1, sz: 32 }), { jc: 'center', spacing: 'w:before="480"' }) + para(run(b.teacher, { sz: 32 }), { jc: 'center' });
-        body += para(run('รายงานนี้เป็นส่วนหนึ่งของรายวิชา' + C.course.name + ' (' + C.course.code + ')', { sz: 32 }), { jc: 'center', spacing: 'w:before="600" w:after="0"' }) + para(run(b.school, { sz: 32 }), { jc: 'center', spacing: 'w:before="0" w:after="0"' }) + para(run('ภาคเรียนที่ 2 ปีการศึกษา ' + b.year, { sz: 32 }), { jc: 'center', spacing: 'w:before="0" w:after="0"' });
+        body += para(run('เสนอ', { b: 1, sz: 32 }), { jc: 'center', spacing: 'w:before="480"' }) + para(run(b.teacher, { sz: 32 }), { jc: 'center', spacing: 'w:before="0" w:after="0"' }) + (b.position ? para(run('ตำแหน่ง ' + b.position, { sz: 32 }), { jc: 'center', spacing: 'w:before="0" w:after="0"' }) : '');
+        body += para(run('รายงานนี้เป็นส่วนหนึ่งของรายวิชา' + C.course.name + ' (' + C.course.code + ')', { sz: 32 }), { jc: 'center', spacing: 'w:before="600" w:after="0"' }) + para(run(b.school, { sz: 32 }), { jc: 'center', spacing: 'w:before="0" w:after="0"' }) + (b.dept ? para(run(b.dept, { sz: 32 }), { jc: 'center', spacing: 'w:before="0" w:after="0"' }) : '') + para(run('ภาคเรียนที่ ' + b.sem + ' ปีการศึกษา ' + b.year, { sz: 32 }), { jc: 'center', spacing: 'w:before="0" w:after="0"' });
         continue;
       }
       if (b.t === 'front') { body += para(run(b.text), { style: b.toc ? 'Heading1' : 'Title', pb: 1 }); continue; }
@@ -300,7 +300,7 @@
   const PW = 794, PH = 1123, MT = 120, ML = 120, MR = 80, MB = 80;
   function blockHTML(b, st) {
     switch (b.t) {
-      case 'cover': return '<div class="ac-cover"><img src="icons/logo-full.png" alt=""><h1>' + esc(b.title) + '</h1><p>' + esc(b.sub) + '</p><p class="sm">' + esc(b.unit) + '</p><div class="cv-by"><b>จัดทำโดย</b><br><b>' + esc(b.group) + (b.room ? ' ชั้นมัธยมศึกษาปีที่ ' + esc(b.room) : '') + '</b><br>' + b.members.map(esc).join('<br>') + '</div><div class="cv-to"><b>เสนอ</b><br>' + esc(b.teacher) + '</div><div class="cv-sc">รายงานนี้เป็นส่วนหนึ่งของรายวิชา' + esc(C.course.name) + ' (' + esc(C.course.code) + ')<br>' + esc(b.school) + '<br>ภาคเรียนที่ 2 ปีการศึกษา ' + esc(b.year) + '</div></div>';
+      case 'cover': return '<div class="ac-cover"><img src="icons/logo-full.png" alt=""><h1>' + esc(b.title) + '</h1><p>' + esc(b.sub) + '</p><p class="sm">' + esc(b.unit) + '</p><div class="cv-by"><b>จัดทำโดย</b><br><b>' + esc(b.group) + (b.room ? ' ชั้นมัธยมศึกษาปีที่ ' + esc(b.room) : '') + '</b><br>' + b.members.map(esc).join('<br>') + '</div><div class="cv-to"><b>เสนอ</b><br>' + esc(b.teacher) + (b.position ? '<br>ตำแหน่ง ' + esc(b.position) : '') + '</div><div class="cv-sc">รายงานนี้เป็นส่วนหนึ่งของรายวิชา' + esc(C.course.name) + ' (' + esc(C.course.code) + ')<br>' + esc(b.school) + (b.dept ? '<br>' + esc(b.dept) : '') + '<br>ภาคเรียนที่ ' + esc(b.sem) + ' ปีการศึกษา ' + esc(b.year) + '</div></div>';
       case 'front': return '<h1 class="ac-title" data-h="1">' + esc(b.text) + '</h1>';
       case 'toc': return '<h1 class="ac-title">สารบัญ</h1><div class="ac-toc">' + st.toc.map((t, i) => '<div class="' + (t.lv === 2 ? 'l2' : 'l1') + '"><span>' + esc(t.text) + '</span><i></i><b data-tocpg="' + i + '">…</b></div>').join('') + '</div>';
       case 'h1': return '<h1 class="ac-ch" data-h="1">บทที่ ' + b.num + '<br>' + esc(b.text) + '</h1>';

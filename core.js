@@ -206,7 +206,10 @@
   }
   function otherNames(G) { const s = new Set(); LIST_KINDS.forEach(k => listOf(G, k).forEach(r => { if (r.community === 'other' && r.communityOther) s.add(String(r.communityOther).trim()); })); return Array.from(s); }
   function commList(G) { const base = C.communities.filter(c => c.id !== 'other'); const ex = {}; LIST_KINDS.forEach(k => listOf(G, k).forEach(r => { if (r.community === 'other') { const c = commObj(r); ex[c.id] = c; } })); return base.concat(Object.values(ex)); }
-  const mediaIds = rec => { const m = rec && rec.media; if (!m) return []; if (Array.isArray(m)) return m.filter(Boolean); return Object.keys(m).sort((a, b) => (m[a] || 0) - (m[b] || 0)); };
+  const mAt = v => (v && typeof v === 'object') ? (v.at || 0) : (v || 0);
+  const mediaIds = rec => { const m = rec && rec.media; if (!m) return []; if (Array.isArray(m)) return m.filter(Boolean); return Object.keys(m).filter(k => m[k]).sort((a, b) => mAt(m[a]) - mAt(m[b])); };
+  /* ประเภทสื่อจากข้อมูลในรายการ (รายการใหม่เก็บ {at,t,by}); รายการเก่าคืนค่า '' = ต้องโหลดไฟล์ก่อนจึงรู้ */
+  const mediaType = (rec, id) => { const v = rec && rec.media && rec.media[id]; return (v && typeof v === 'object' && v.t) || ''; };
   function filled(o) { return !!o && Object.keys(o).some(k => { if (k[0] === '_') return false; const v = o[k]; return Array.isArray(v) ? v.length : (v !== '' && v != null && v !== false && typeof v !== 'object'); }); }
   function taskProgress(t, G, personal) {
     const docs = (G && G.docs) || {};
@@ -341,7 +344,7 @@
       '<h1>' + esc(title) + '</h1><div class="cv-unit">' + esc(C.course.unit) + '</div>' +
       '<div class="cv-name">' + esc((ctx.group && ctx.group.name) || '') + ' · ม.' + esc((ctx.group && ctx.group.room) || '') + '</div>' +
       '<div class="cv-members">' + ctx.members.map(m => esc(m.name) + ' เลขที่ ' + esc(m.no)).join('<br>') + '</div>' +
-      '<div class="cv-foot">' + esc(C.course.school) + '<br>ครูผู้สอน ' + esc(C.course.teacher) + ' · ปีการศึกษา ' + esc(C.course.year) + '</div></div>' });
+      '<div class="cv-foot">' + esc(C.course.school) + '<br>ครูผู้สอน ' + esc(C.course.teacher) + ' · ภาคเรียนที่ ' + esc(C.course.semester || '') + ' ปีการศึกษา ' + esc(C.course.year) + '</div></div>' });
     let ov = '<h2>สมาชิกและบทบาทในกลุ่ม</h2>' + memberTable(ctx.members, sy);
     if (R.intro) ov += '<h3>คำนำ</h3><p>' + nl2(R.intro) + '</p>';
     if (sy.coverage.length) ov += '<h3>ภาพรวมข้อมูลที่เก็บได้</h3><table class="tb"><tr><th>ชุมชน</th><th>ภาคสนาม</th><th>สัมภาษณ์</th><th>วิเคราะห์ดนตรี</th><th>บทบาทสังคม</th></tr>' + sy.coverage.map(x => '<tr><td style="text-align:left">' + x.c.emoji + ' ' + esc(x.c.name) + '</td><td>' + x.notes + '</td><td>' + x.interviews + '</td><td>' + x.analyses + '</td><td>' + x.roles + '</td></tr>').join('') + '</table>';
@@ -411,6 +414,7 @@
   const LIBS = {
     h2c: [['html2canvas.min.js', 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js', () => window.html2canvas]],
     pdf: [['jspdf.umd.min.js', 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', () => window.jspdf]],
+    leaflet: [['leaflet.min.js', 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js', () => window.L]],
     xlsx: [['xlsx.full.min.js', 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', () => window.XLSX]],
     fb: [
       ['firebase-app-compat.js', 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js', () => window.firebase],
@@ -421,6 +425,7 @@
   const libCache = {};
   const injectScript = src => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.async = false; s.onload = res; s.onerror = () => { s.remove(); rej(new Error('load fail ' + src)); }; document.head.appendChild(s); });
   function loadLibs(name) {
+    if (name === 'leaflet' && !document.getElementById('leaflet-css')) { const l = document.createElement('link'); l.id = 'leaflet-css'; l.rel = 'stylesheet'; l.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'; document.head.appendChild(l); }
     if (!libCache[name]) libCache[name] = (async () => {
       for (const [file, cdn, check] of LIBS[name]) { if (check()) continue; try { await injectScript('lib/' + file); } catch (e) { /* no local copy */ } if (!check()) await injectScript(cdn); }
     })().catch(e => { delete libCache[name]; throw e; });
@@ -490,10 +495,13 @@
   const blobToDataURL = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(b); });
   const avatar = (name, cls) => '<span class="av ' + (cls || '') + '" title="' + esc(name) + '">' + esc(initials(name)) + '</span>';
   const brandHTML = () => '<div class="brand"><img src="icons/logo-mark-512.png" alt=""><div><b>' + esc(C.appName) + '</b><span>' + esc(C.appFull) + '</span></div></div>';
+  const INFO_KEYS = ['school', 'department', 'code', 'name', 'unit', 'teacher', 'teacherPosition', 'year', 'semester', 'rooms'];
+  function applyInfo(cfg) { const inf = cfg && cfg.info; if (!inf) return; INFO_KEYS.forEach(k => { if (inf[k] != null && inf[k] !== '') C.course[k] = k === 'rooms' ? +inf[k] || C.course.rooms : inf[k]; }); }
   const copyrightHTML = () => '<footer class="copy">' + esc(C.copyright) + '</footer>';
 
-  window.MC = { C, $, $$, esc, uid, pad, isoDate, today, nowTime, thDate, thDateTime, ago, comm, commName, commObj, commLabel, commById, inComm, commList, otherNames, taskById, roleById, nl2, short, initials, OPT, Q, FORMS, KIND_OF_TASK, LIST_KINDS,
+  window.MC = { mediaType,
+    C, $, $$, esc, uid, pad, isoDate, today, nowTime, thDate, thDateTime, ago, comm, commName, commObj, commLabel, commById, inComm, commList, otherNames, taskById, roleById, nl2, short, initials, OPT, Q, FORMS, KIND_OF_TASK, LIST_KINDS,
     listOf, mediaIds, filled, taskProgress, synth, metaHTML, mediaHTML, gpsHTML, renderRecord, barsHTML, memberTable,
     EV_STATUS, monthGrid, eventCard, icsFor, buildPages, buildPoster, exportPDF, exportPNGs, exportPoster, printPages, previewPages,
-    loadLibs, saveBlob, saveFiles, saveJSON, toast, modal, fileToImageData, blobToDataURL, avatar, brandHTML, copyrightHTML };
+    loadLibs, saveBlob, saveFiles, saveJSON, toast, modal, fileToImageData, blobToDataURL, avatar, brandHTML, copyrightHTML, applyInfo, INFO_KEYS };
 })();

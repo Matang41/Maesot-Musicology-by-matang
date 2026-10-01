@@ -298,3 +298,39 @@ a.sync { text-decoration: none; }
 .ac-cpage .ac-cover { text-align: center; padding-top: 10px; } .ac-cover img { width: 150px; border-radius: 24px; margin-bottom: 16px; }
 .ac-cover h1 { font-size: 26px; font-weight: 700; margin: 10px 0; line-height: 1.4; } .ac-cover p { margin: 2px 0; font-size: 16px; } .ac-cover p.sm { font-size: 14px; color: #444; }
 .ac-cover .cv-by { margin-top: 60px; font-size: 16px; line-height: 1.7; } .ac-cover .cv-to { margin-top: 40px; font-size: 16px; } .ac-cover .cv-sc { margin-top: 60px; font-size: 15px; line-height: 1.6; }
+
+.teacher-link a + a { margin-left: 6px; }
+
+.info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 14px; }
+
+/* ---------- ตรวจทีละงาน / คอมเมนต์ครู / แจ้งเตือน ---------- */
+.tcard { border-left: 5px solid var(--g400); }
+.tcard details { margin: 6px 0; } .tcard summary { cursor: pointer; color: var(--p600); font-weight: 600; }
+.tgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 12px; margin-top: 6px; }
+.tgrid .f { margin-bottom: 6px; } .tgrid .rub button { min-height: 38px; }
+.big-score.sm { font-size: 1.3rem; margin-left: 8px; }
+.sub-rec { border-top: 1px dashed var(--line); padding: 8px 0; }
+.tcbox { margin-top: 8px; background: var(--g50); border: 1px solid #f0dfa6; border-radius: 10px; padding: 8px; }
+.tcbox label { display: block; font-size: .8rem; font-weight: 600; color: var(--g700); margin-bottom: 4px; } .tcbox textarea { min-height: 44px; }
+.tcomment { background: linear-gradient(135deg, var(--g100), #fff); border: 1px solid #f0dfa6; border-left: 4px solid var(--g400); border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; font-size: .92rem; }
+.tcomment b { color: var(--g700); }
+.bell { position: relative; background: rgba(255,255,255,.14); border: 1px solid rgba(242,207,107,.4); color: #fff; width: 36px; height: 32px; border-radius: 10px; cursor: pointer; font-size: 1rem; flex: none; }
+.bell b { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; border-radius: 9px; background: var(--bad); color: #fff; font-size: .66rem; display: grid; place-items: center; padding: 0 4px; }
+.feed li.new { background: var(--g50); border-radius: 8px; padding-left: 6px; }
+
+/* ---------- ตรา / แผนที่ / ห้องฟัง ---------- */
+.seg { overflow-x: auto; scrollbar-width: none; } .seg::-webkit-scrollbar { display: none; } .seg a, .seg button { flex: 1 0 auto; white-space: nowrap; padding-left: 10px; padding-right: 10px; }
+.bdg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.bdg { text-align: center; border: 1.5px dashed var(--line); border-radius: 14px; padding: 8px 6px; opacity: .55; filter: grayscale(.9); }
+.bdg span { font-size: 1.7rem; display: block; } .bdg b { display: block; font-size: .8rem; line-height: 1.25; } .bdg small { display: block; font-size: .66rem; color: var(--mut); line-height: 1.25; margin-top: 2px; }
+.bdg.got { opacity: 1; filter: none; border: 1.5px solid var(--g400); background: linear-gradient(180deg, var(--g50), #fff); box-shadow: 0 2px 8px rgba(201,151,28,.25); }
+.bdg.got b { color: var(--p700); }
+.bdg-mini { font-size: 1.1rem; margin-right: 2px; }
+.map-box { height: 360px; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); margin-top: 8px; background: var(--p50); }
+.map-box.tall { height: 560px; } .map-svg { width: 100%; height: auto; display: block; }
+.map-legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; font-size: .84rem; } .map-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--line); }
+.ab { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; } .ab label { font-family: var(--head); font-weight: 700; color: var(--p600); } .ab select { margin: 4px 0; }
+@media (max-width: 560px) { .ab { grid-template-columns: 1fr; } }
+.lrow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px dashed var(--line); } .lrow audio { flex: 1 1 260px; }
+.quiz-score { font-family: var(--head); font-size: 1.05rem; margin: 8px 0; color: var(--p700); }
+.lrow > .grow { flex: 1 1 180px; min-width: 150px; }

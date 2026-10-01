@@ -117,6 +117,13 @@
     "config": {
       ".read": "auth != null",
       ".write": "(auth != null && auth.token.email_verified == true && auth.token.email == 'ntpwm2541@gmail.com')"
+    },
+    "tcomments": {
+      ".read": "(auth != null && auth.token.email_verified == true && auth.token.email == 'ntpwm2541@gmail.com')",
+      ".write": "(auth != null && auth.token.email_verified == true && auth.token.email == 'ntpwm2541@gmail.com')",
+      "$gid": {
+        ".read": "((auth != null && auth.token.email_verified == true && auth.token.email.endsWith('@sappha.ac.th')) && root.child('groups/' + $gid + '/members/' + auth.token.email.replace('@sappha.ac.th', '')).exists())"
+      }
     }
   }
 }

@@ -13,7 +13,7 @@
   const MEDIA = {}; let subs = [], gsubs = [];
   const CAL = { y: new Date().getFullYear(), m: new Date().getMonth(), sel: today() };
   let STATUS = { online: true, pending: 0, failed: 0 };
-  function blankD() { return { roster: null, group: null, records: {}, docs: {}, history: {}, personal: {}, calendar: {}, config: {}, gGrade: null, sGrade: null, ready: false }; }
+  function blankD() { return { roster: null, group: null, records: {}, docs: {}, history: {}, personal: {}, calendar: {}, config: {}, gGrade: null, sGrade: null, tc: {}, ready: false }; }
   const me = () => ({ sid: ME.sid, name: ME.name });
   const G = () => ({ records: D.records || {}, docs: D.docs || {}, history: D.history || {} });
   const W = p => Promise.resolve(p).catch(e => { toast('บันทึกขึ้นเซิร์ฟเวอร์ไม่สำเร็จ: ' + ((e && (e.code || e.message)) || e) + ' (ข้อมูลยังอยู่ในเครื่อง)', 4500); });
@@ -51,14 +51,14 @@
     if (!GID) { onData(); return; }
     const S = (p, k, err) => gsubs.push(B.on(p, v => { D[k] = v || (k === 'group' || k === 'gGrade' ? null : {}); onData(); }, err));
     S('groups/' + GID, 'group'); S('records/' + GID, 'records'); S('docs/' + GID, 'docs'); S('history/' + GID, 'history');
-    S('grades/groups/' + GID, 'gGrade', () => { });
+    S('grades/groups/' + GID, 'gGrade', () => { }); S('tcomments/' + GID, 'tc', () => { });
   }
 
   let rT = null;
   function onData() {
     if (!D.ready) return;
     cancelAnimationFrame(rT); rT = requestAnimationFrame(() => {
-      if (CUR && $('[data-form]')) syncForm(); else render(true);
+      if (CUR && $('[data-form]')) syncForm(); else if (['listen', 'map'].includes(route().a)) setBadge(); else render(true);
     });
     clearTimeout(onData.snap); onData.snap = setTimeout(() => {
       if (GID) B.snapshot('g:' + GID, { group: D.group, records: D.records, docs: D.docs });
@@ -74,7 +74,8 @@
     const sid = B.sidFromEmail(u.email);
     if (!sid) { renderBlocked('ใช้ได้เฉพาะบัญชีนักเรียน @' + C.auth.domain, 'บัญชี ' + u.email + ' ไม่ใช่อีเมลนักเรียนของโรงเรียน (รูปแบบ รหัสนักเรียน@' + C.auth.domain + ')'); return; }
     $('#root').innerHTML = '<div class="empty" style="padding-top:30vh">กำลังโหลดข้อมูล…</div>';
-    await first('roster/' + sid, v => { D.roster = v; });
+    let rErr = null; await first('roster/' + sid, v => { D.roster = v; }, e => { rErr = e; });
+    if (rErr) { renderBlocked('ล็อกอินสำเร็จ แต่อ่านข้อมูลไม่ได้', 'บัญชี ' + u.email + ' ได้รับการปฏิเสธจากฐานข้อมูล (' + ((rErr && (rErr.code || rErr.message)) || rErr) + ') — ครูตรวจว่าเผยแพร่ Rules แล้ว และนำเข้ารายชื่อรหัส ' + sid + ' แล้ว', diagBtn()); return; }
     if (!D.roster) { renderBlocked('ไม่พบรหัส ' + sid + ' ในรายชื่อ', 'ครูยังไม่ได้นำเข้ารายชื่อของคุณ หรือรหัสไม่ตรง กรุณาแจ้งครู'); return; }
     if (D.roster.left) { renderBlocked('บัญชีนี้ไม่อยู่ในรายชื่อรายวิชาแล้ว', 'ครูได้นำรหัส ' + sid + ' ออกจากรายชื่อ (' + (D.roster.leftNote || 'ย้ายออก') + ') หากไม่ถูกต้องกรุณาแจ้งครู'); return; }
     ME = { sid, name: D.roster.name, room: D.roster.room, no: D.roster.no, email: u.email, photo: u.photo };
@@ -82,7 +83,7 @@
       first('memberOf/' + sid, v => { if ((v || null) !== GID) subGroup(v); }),
       first('personal/' + sid, v => { D.personal = v || {}; }),
       first('calendar', v => { D.calendar = v || {}; }),
-      first('config', v => { D.config = v || {}; }, () => { }),
+      first('config', v => { D.config = v || {}; M.applyInfo(D.config); }, () => { }),
       first('grades/students/' + sid, v => { D.sGrade = v; }, () => { })
     ]);
     D.ready = true; render();
@@ -117,10 +118,32 @@
     const g = HUBG[gid]; sessionStorage.setItem('mcm5_viewas', gid);
     ME = { sid: 'teacher', name: 'ครู (' + (u.name || u.email) + ')', room: g.room, no: '-', email: u.email, teacher: true };
     D.personal = {};
-    await Promise.all([first('calendar', v => { D.calendar = v || {}; }, () => { }), first('config', v => { D.config = v || {}; }, () => { })]);
+    await Promise.all([first('calendar', v => { D.calendar = v || {}; }, () => { }), first('config', v => { D.config = v || {}; M.applyInfo(D.config); }, () => { })]);
     subGroup(gid); D.ready = true; if (route().a === 'hub') location.hash = '#/home'; render();
   }
   const WRITE_ACTS = ['new', 'delrec', 'restore', 'delmedia', 'gps', 'clearsign', 'assign', 'flag', 'roles', 'propose', 'pick', 'rec'];
+
+  /* ---------- คอมเมนต์ครู + การแจ้งเตือน ---------- */
+  function tcHTML(rid) { const c = D.tc && D.tc[rid]; return c ? '<div class="tcomment"><b>💬 ครูคอมเมนต์</b> <span class="muted">· ' + esc(thDateTime(c.at)) + '</span><div style="margin-top:4px">' + nl2(c.text) + '</div></div>' : ''; }
+  const seenKey = () => 'mcm5_seen_' + (ME ? ME.sid : '');
+  function getSeen() { try { return +localStorage.getItem(seenKey()) || 0; } catch (e) { return 0; } }
+  function notifs() {
+    if (!ME) return []; const seen = getSeen(), out = [];
+    myEvents().forEach(e => { if (e.status === 'approved' && e.approvedAt) out.push({ ic: '✅', t: 'ครูอนุมัตินัดลงพื้นที่ “' + e.title + '” ' + thDate(e.date), at: e.approvedAt, go: '#/calendar' });
+      else if (e.createdBy && e.createdBy.sid === 'teacher' && e.createdAt) out.push({ ic: '🗓', t: 'ครูเพิ่มนัดลงพื้นที่ “' + e.title + '” ' + thDate(e.date) + (e.teacherJoin ? ' (ครูไปด้วย)' : ''), at: e.updatedAt || e.createdAt, go: '#/calendar' }); });
+    Object.keys(D.tc || {}).forEach(rid => { const c = D.tc[rid]; const kind = c.kind; const rec = M.LIST_KINDS.includes(kind) ? getRec(kind, rid) : null; out.push({ ic: '💬', t: 'ครูคอมเมนต์ใน' + ((FORMS[kind] || {}).title || '') + (rec ? ' “' + FORMS[kind].summary(rec).t + '”' : '') + ': ' + String(c.text).slice(0, 60), at: c.at, go: rec ? '#/' + kind + '/' + rid : '#/' + kind }); });
+    const gt = (D.gGrade && D.gGrade.released && D.gGrade.tasks) || {}; Object.keys(gt).forEach(tid => { const tk = taskById(tid); if (tk && gt[tid].at) out.push({ ic: '⭐', t: 'ครูให้คะแนนงาน “' + tk.name + '” แล้ว', at: gt[tid].at, go: '#/' + TASK_ROUTE[tid] }); });
+    const mine = Object.values(D.history || {}).filter(h => h.at > seen && h.by && h.by.sid !== ME.sid);
+    if (mine.length) { const who = Array.from(new Set(mine.map(h => short(h.by.name)))).join(', '); out.push({ ic: '👥', t: who + ' บันทึก/แก้ไขข้อมูลกลุ่ม ' + mine.length + ' ครั้ง', at: Math.max.apply(null, mine.map(h => h.at)), go: '#/home' }); }
+    out.forEach(x => x.isNew = (x.at || 0) > seen);
+    return out.sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 30);
+  }
+  function bellModal() {
+    const list = notifs();
+    modal('<h3>🔔 การแจ้งเตือน</h3>' + (list.length ? '<ul class="feed">' + list.map(n => '<li class="' + (n.isNew ? 'new' : '') + '"><span style="font-size:1.3rem">' + n.ic + '</span><div class="grow">' + esc(n.t) + '<div class="muted" style="font-size:.74rem">' + esc(ago(n.at)) + (n.isNew ? ' · ใหม่' : '') + '</div></div><a class="btn xs sec" href="' + n.go + '" data-close>ดู</a></li>').join('') + '</ul>' : '<div class="empty">ยังไม่มีการแจ้งเตือน</div>') + '<button class="btn sec block" style="margin-top:10px" data-close>ปิด</button>', { center: true });
+    try { localStorage.setItem(seenKey(), Date.now()); } catch (e) { /* ignore */ }
+    setTimeout(() => { const b = $('.bell b'); if (b) b.remove(); }, 50);
+  }
 
   /* ---------- การเขียนข้อมูล ---------- */
   const lastHist = {};
@@ -173,13 +196,13 @@
     if (n >= (type === 'image' ? 10 : 3)) { toast(type === 'image' ? 'แนบรูปได้สูงสุด 10 รูปต่อรายการ' : 'แนบเสียงได้สูงสุด 3 ไฟล์ต่อรายการ'); return; }
     const mid = B.uid(), now = Date.now(); const obj = { type, d, by: me(), at: now, kind: CUR.kind, rid: CUR.rid };
     MEDIA[mid] = obj; W(B.putMedia(GID, mid, obj));
-    W(B.update(CUR.path, { ['media/' + mid]: now, updatedAt: now, updatedBy: me() })); log(CUR.kind, CUR.rid, 'media', null);
+    W(B.update(CUR.path, { ['media/' + mid]: { at: now, t: type, by: ME.sid }, updatedAt: now, updatedBy: me() })); log(CUR.kind, CUR.rid, 'media', null);
   }
   async function addImage(file) { try { await addMedia('image', await M.fileToImageData(file, 1280, 0.72)); } catch (e) { toast('เพิ่มรูปไม่สำเร็จ'); } }
 
   /* ---------- shell ---------- */
   const NAV = [['home', '🏠', 'กลุ่ม'], ['notes', '📓', 'ภาคสนาม'], ['analyses', '🎻', 'วิเคราะห์'], ['calendar', '🗓', 'ปฏิทิน'], ['synth', '🧩', 'สรุป']];
-  const NAVMAP = { home: 'home', notes: 'notes', interviews: 'notes', analyses: 'analyses', roles: 'analyses', calendar: 'calendar', synth: 'synth', conservation: 'synth', report: 'synth', reflection: 'synth', trash: 'home', safety: 'home' };
+  const NAVMAP = { home: 'home', notes: 'notes', interviews: 'notes', analyses: 'analyses', roles: 'analyses', calendar: 'calendar', synth: 'synth', conservation: 'synth', report: 'synth', reflection: 'synth', map: 'synth', listen: 'synth', trash: 'home', safety: 'home' };
   function route() { const h = (location.hash || '#/home').replace(/^#\/?/, ''); const [a, b] = h.split('/'); return { a: a || 'home', b: b || '' }; }
   function badge() {
     if (B.mode === 'demo' && STATUS.pending === 0) return ['off', '🧪 โหมดสาธิต'];
@@ -193,7 +216,7 @@
     o = o || {}; const [bc, bt] = badge(); const cur = NAVMAP[route().a];
     const pendProp = myEvents().filter(e => e.date >= today()).length;
     return '<div class="app"><header class="topbar">' + (o.back ? '<button class="back" data-go="' + o.back + '" aria-label="กลับ">‹</button>' : '<img class="logo" src="icons/logo-mark-512.png" alt="">') +
-      '<h1>' + esc(title) + '</h1><button class="sync ' + bc + '" data-act="safety">' + bt + '</button></header>' +
+      '<h1>' + esc(title) + '</h1>' + (ME && !ME.teacher ? (() => { const n = notifs().filter(x => x.isNew).length; return '<button class="bell" data-act="bell" aria-label="การแจ้งเตือน">🔔' + (n ? '<b>' + n + '</b>' : '') + '</button>'; })() : '') + '<button class="sync ' + bc + '" data-act="safety">' + bt + '</button></header>' +
       (ME && ME.teacher ? '<div class="viewas">👀 มุมมองครู · ' + esc((D.group || {}).name || '') + ' (อ่านอย่างเดียว)<button class="btn xs gold" data-act="hubview">เปลี่ยนกลุ่ม</button><button class="btn xs sec" data-act="hub">ศูนย์กลาง</button></div>' : '') +
       (B.mode === 'demo' ? '<div class="demo-strip">🧪 โหมดทดลอง (ข้อมูลสาธิต)' + (B.realConfigured() ? ' · <a href="index.html?demo=0">ออกไปข้อมูลจริง</a>' : '') + ' · <a href="#" data-act="switchacct">สลับบัญชี</a></div>' : '') +
       '<main>' + inner + M.copyrightHTML() + '</main></div>' +
@@ -202,12 +225,14 @@
   const seg = (items, cur) => '<div class="seg">' + items.map(i => '<a href="#/' + i[0] + '" class="' + (i[0] === cur ? 'on' : '') + '">' + i[1] + '</a>').join('') + '</div>';
   const SEG_F = [['notes', '📓 ภาคสนาม'], ['interviews', '🤝 สัมภาษณ์']];
   const SEG_A = [['analyses', '🎻 องค์ประกอบ'], ['roles', '🏮 บทบาทสังคม']];
-  const SEG_S = [['synth', '🧩 ประมวลผล'], ['conservation', '🕊️ อนุรักษ์'], ['report', '📄 รายงาน'], ['reflection', '💭 ของฉัน']];
+  const SEG_S = [['synth', '🧩 ประมวลผล'], ['map', '🗺 แผนที่'], ['listen', '🎧 ห้องฟัง'], ['conservation', '🕊️ อนุรักษ์'], ['report', '📄 รายงาน'], ['reflection', '💭 ของฉัน']];
 
   /* ---------- หน้าจอเข้าสู่ระบบ ---------- */
   const GSVG = '<svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.6-.4-3.9z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/></svg>';
   function renderLogin() {
-    const err = B.authError ? '<div class="warn-box">' + esc(B.authError.message || B.authError.code) + '</div>' : '';
+    const d = B.diagnostics(); const iosApp = d.standalone && d.ios && !d.sameOriginAuth && B.mode !== 'demo';
+    const err = (B.authError ? '<div class="warn-box"><b>ล็อกอินไม่สำเร็จ</b><br>' + esc(B.authErrorText(B.authError)) + '</div>' : '') +
+      (iosApp ? '<div class="tip">📱 คุณเปิดจากไอคอนบนหน้าจอโฮมของ iPhone/iPad — ถ้าล็อกอินไม่ผ่าน ให้เปิดลิงก์เดียวกันใน <b>Safari</b> แทน (ข้อมูลอยู่บนคลาวด์ ไม่หาย)</div>' : '');
     const tmode = route().a === 'teacher'; const demo = B.mode === 'demo';
     const hero = '<div class="hero"><div class="logos"><img class="big" src="icons/logo-full.png" alt="Mae Sot Musicology"></div><h1>' + esc(C.appFull) + '</h1><p>' + esc(C.course.code) + ' ' + esc(C.course.name) + ' · ' + esc(C.course.school) + '</p></div>';
     if (demo) {
@@ -225,7 +250,19 @@
     $('#root').innerHTML = hero + '<div class="card login-card">' + err +
       '<button class="gbtn big" data-act="login">' + GSVG + '<span>นักเรียนเข้าสู่ระบบ<small>ด้วยอีเมล รหัสนักเรียน@' + esc(C.auth.domain) + '</small></span></button>' +
       '<ol class="steps"><li>กดปุ่มด้านบน แล้วเลือกบัญชีโรงเรียนของตัวเอง</li><li>ระบบพาเข้ากลุ่มที่ครูจัดไว้ให้ทันที</li><li>ลงพื้นที่ บันทึก ถ่ายภาพ อัดเสียง ร่วมกับเพื่อนได้เลย 🎶</li></ol>' +
-      '</div><div class="teacher-link"><a href="#/teacher">👩‍🏫 สำหรับครู</a></div>' + M.copyrightHTML();
+      '</div><div class="teacher-link"><a href="#/teacher">👩‍🏫 สำหรับครู</a> <a href="#" data-act="diag">🩺 แก้ปัญหาล็อกอิน</a></div>' + M.copyrightHTML();
+  }
+  const diagBtn = () => '<button class="btn sm ghost block" data-act="diag">🩺 ตรวจระบบ / แก้ปัญหา</button>';
+  function diagModal() {
+    const d = B.diagnostics(); const ok = v => v ? '✅' : '⚠️';
+    const tips = [];
+    if (d.lastAuthError) tips.push('ข้อผิดพลาดล่าสุด: ' + d.lastAuthError);
+    if (!d.navigatorOnline) tips.push('เครื่องออฟไลน์ — เชื่อมอินเทอร์เน็ตก่อนล็อกอินครั้งแรก');
+    if (d.standalone && d.ios && !d.sameOriginAuth) tips.push('iPhone/iPad ที่เปิดจากไอคอนหน้าจอโฮม อาจล็อกอิน Google ไม่ได้เมื่อเว็บอยู่บน github.io → เปิดใน Safari หรือให้ครูย้ายเว็บไป Firebase Hosting');
+    tips.push('ใช้บัญชี รหัสนักเรียน@' + C.auth.domain + ' (ถ้ามีหลายบัญชีในเครื่อง ให้เลือกให้ถูก)');
+    tips.push('ถ้าขึ้นหน้าต่างแล้วหายไป ให้อนุญาต pop-up ของเว็บนี้');
+    modal('<h3>🩺 ตรวจระบบ</h3><table class="mini"><tr><td>เว็บ</td><td>' + esc(d.host) + '</td></tr><tr><td>ระบบล็อกอิน</td><td>' + esc(d.authDomain || '-') + ' ' + ok(d.sameOriginAuth) + (d.sameOriginAuth ? ' โดเมนเดียวกัน' : ' คนละโดเมน (ใช้ pop-up)') + '</td></tr><tr><td>เปิดแบบแอป</td><td>' + (d.standalone ? 'ใช่' : 'ไม่ (เบราว์เซอร์)') + ' · ' + esc(d.browser) + (d.ios ? ' · iOS' : '') + '</td></tr><tr><td>อินเทอร์เน็ต</td><td>' + ok(d.navigatorOnline) + ' ' + (d.online ? 'เชื่อมฐานข้อมูลแล้ว' : 'ยังไม่เชื่อมฐานข้อมูล') + '</td></tr><tr><td>รอส่ง/ส่งไม่สำเร็จ</td><td>' + d.pending + ' / ' + d.failed + '</td></tr></table>' +
+      '<div class="card-title" style="margin-top:12px">วิธีแก้</div><ul style="margin:0;padding-left:20px">' + tips.map(t => '<li>' + esc(t) + '</li>').join('') + '</ul><button class="btn sec block" style="margin-top:12px" data-close>ปิด</button>', { center: true });
   }
   function renderBlocked(title, msg, extra) {
     $('#root').innerHTML = '<div class="hero"><div class="logos"><img class="big" src="icons/logo-full.png" alt=""></div></div><div class="card login-card"><h3>⚠ ' + esc(title) + '</h3><p class="muted">' + esc(msg) + '</p>' + (extra || '') + '<button class="btn sec block" style="margin-top:8px" data-act="logout">ออกจากระบบ / เปลี่ยนบัญชี</button></div>' + M.copyrightHTML();
@@ -270,7 +307,9 @@
     const feed = '<div class="card"><div class="card-title">🔔 ความเคลื่อนไหวล่าสุด</div>' + (hist.length ? '<ul class="feed">' + hist.map(h => '<li>' + avatar((h.by || {}).name, 'sm') + '<div class="grow"><b>' + esc(short((h.by || {}).name)) + '</b> ' + (ACT[h.act] || h.act) + ' ' + esc((FORMS[h.kind] || {}).title || h.kind) + '<div class="muted" style="font-size:.74rem">' + esc(ago(h.at)) + '</div></div></li>').join('') + '</ul>' : '<div class="muted">ยังไม่มีการบันทึก</div>') + '</div>';
     const mineCard = '<div class="card"><div class="card-title">🙋 งานที่ฉันรับผิดชอบ</div>' + (myTasks.length ? myTasks.map(t => '<a class="pill" style="margin:2px 4px 2px 0;text-decoration:none" href="#/' + TASK_ROUTE[t.id] + '">' + t.icon + ' ' + esc(t.name) + '</a>').join('') : '<div class="muted">ยังไม่ได้รับงาน — เปิดงานแต่ละชิ้นแล้วกด “รับงานนี้”</div>') +
       (mine.roles.length ? '' : '<div class="tip" style="margin:10px 0 0">ยังไม่ได้เลือกบทบาทในกลุ่ม <button class="btn xs gold" data-act="roles">เลือกบทบาท</button></div>') + '</div>';
-    return shell(D.group.name, groupCard + nextCard + mineCard + '<h3 style="margin:16px 4px 8px">งานของกลุ่ม (หน่วยที่ 2)</h3>' + tasks + contrib + feed +
+    const bl = EXTRAS.badges(G(), mem, ME.sid, D.personal); const meB = bl.filter(b => b.scope === 'me'), grB = bl.filter(b => b.scope === 'group');
+    const bdgCard = '<div class="card"><div class="card-title">🏅 ตราสัญลักษณ์ <span class="muted">ของฉัน ' + meB.filter(b => b.got).length + '/' + meB.length + ' · กลุ่ม ' + grB.filter(b => b.got).length + '/' + grB.length + '</span></div>' + EXTRAS.badgesHTML(meB) + '<div class="muted" style="margin:10px 0 6px">ตราของกลุ่ม</div>' + EXTRAS.badgesHTML(grB) + '</div>';
+    return shell(D.group.name, groupCard + nextCard + mineCard + bdgCard + '<h3 style="margin:16px 4px 8px">งานของกลุ่ม (หน่วยที่ 2)</h3>' + tasks + contrib + feed +
       '<div class="card"><div class="row"><div class="grow"><b>' + esc(ME.name) + '</b><div class="muted">' + esc(ME.email) + '</div></div><button class="btn sm sec" data-act="safety">🛟 ความปลอดภัยข้อมูล</button></div><button class="btn sm bad block" style="margin-top:10px" data-act="logout">ออกจากระบบ</button></div>');
   }
 
@@ -299,7 +338,7 @@
     const items = list.length ? list.map(r => {
       const s = F.summary(r), c = M.commObj(r), cb = r.createdBy || {};
       return '<a class="card link" href="#/' + kind + '/' + r.id + '" style="border-left:5px solid ' + (c ? c.color : 'var(--p200)') + '"><div class="row">' + avatar(cb.name, cb.sid === ME.sid ? 'me' : '') + '<div class="grow"><div class="rec-t">' + esc(s.t) + '</div><div class="rec-s">' + esc(s.s) + '</div>' +
-        '<div class="rec-s" style="font-size:.74rem">📝 ' + esc(short(cb.name)) + ' · ' + esc(thDateTime(r.createdAt)) + (r.updatedBy && r.updatedAt - r.createdAt > 60000 ? ' · แก้ล่าสุด ' + esc(short(r.updatedBy.name)) + ' ' + esc(ago(r.updatedAt)) : '') + '</div></div><div class="muted">' + (M.mediaIds(r).length ? '📎' + M.mediaIds(r).length + ' ' : '') + '›</div></div></a>';
+        '<div class="rec-s" style="font-size:.74rem">📝 ' + esc(short(cb.name)) + ' · ' + esc(thDateTime(r.createdAt)) + (r.updatedBy && r.updatedAt - r.createdAt > 60000 ? ' · แก้ล่าสุด ' + esc(short(r.updatedBy.name)) + ' ' + esc(ago(r.updatedAt)) : '') + '</div></div><div class="muted">' + (M.mediaIds(r).length ? '📎' + M.mediaIds(r).length + ' ' : '') + (D.tc && D.tc[r.id] ? '<span title="ครูคอมเมนต์">💬</span> ' : '') + '›</div></div></a>';
     }).join('') : '<div class="empty"><div class="big">' + F.icon + '</div>กลุ่มยังไม่มีรายการ<br>กดปุ่ม ＋ เพื่อเริ่มบันทึก</div>';
     return shell(F.title, seg(kind === 'notes' || kind === 'interviews' ? SEG_F : SEG_A, kind) + taskCard(t) + items + '<div style="text-align:center"><a class="btn sm ghost" href="#/trash">🗑 ถังขยะ (กู้คืนรายการที่ลบ)</a></div>' +
       '<button class="fab" data-act="new" data-kind="' + kind + '" aria-label="เพิ่ม">＋</button>');
@@ -353,7 +392,7 @@
     CUR = { kind, rid, single: false, path: recPath(kind, rid) };
     if (!rec) return shell(F.title, '<div class="empty">กำลังโหลด…</div>', { back: '#/' + kind });
     if (rec.deleted) { CUR = null; return shell(F.title, '<div class="warn-box">รายการนี้ถูกลบแล้ว</div><a class="btn" href="#/trash">ไปถังขยะเพื่อกู้คืน</a>', { back: '#/' + kind }); }
-    return shell(F.title, '<div id="metaBox">' + M.metaHTML(rec) + '</div><div class="card">' + formBody(kind, rec, false) + '</div>' +
+    return shell(F.title, tcHTML(rid) + '<div id="metaBox">' + M.metaHTML(rec) + '</div><div class="card">' + formBody(kind, rec, false) + '</div>' +
       '<div class="row wrap"><button class="btn grow" data-go="#/' + kind + '">✓ เสร็จ กลับไปรายการ</button><button class="btn sec" data-act="history">🕘 ประวัติ</button><button class="btn bad" data-act="delrec">🗑 ลบ</button></div><div class="muted" style="text-align:center;margin-top:8px">บันทึกอัตโนมัติทุกครั้งที่พิมพ์ · เพื่อนในกลุ่มเห็นทันที</div>', { back: '#/' + kind });
   }
   function viewSingle(kind) {
@@ -374,7 +413,7 @@
         members().filter(m => m.sid !== ME.sid).map(m => '<div class="f"><div class="row">' + avatar(m.name, 'sm') + '<b class="grow">' + esc(m.name) + '</b></div><div class="scale" style="margin-top:6px">' + [1, 2, 3, 4].map(v => '<button type="button" data-peer="' + m.sid + '" data-v="' + v + '" class="' + ((pr[m.sid] || {}).score === v ? 'on' : '') + '">' + v + '</button>').join('') + '</div>' +
         '<input type="text" data-peernote="' + m.sid + '" value="' + esc((pr[m.sid] || {}).note || '') + '" placeholder="เพื่อนทำอะไรให้กลุ่มบ้าง (ไม่บังคับ)" style="margin-top:6px"></div>').join('') + '</div>';
     }
-    return shell(F.title, seg(SEG_S, kind) + taskCard(t) + '<div class="card">' + formBody(kind, rec, kind !== 'reflection') + '</div>' + peer + extra);
+    return shell(F.title, seg(SEG_S, kind) + taskCard(t) + (kind !== 'reflection' ? tcHTML(kind) : '') + '<div class="card">' + formBody(kind, rec, kind !== 'reflection') + '</div>' + peer + extra);
   }
 
   /* ---------- ประมวลผลกลาง ---------- */
@@ -419,8 +458,10 @@
     return shell('ความปลอดภัยของข้อมูล', '<div class="card"><div class="card-title">🛟 ระบบกันข้อมูลสูญหาย</div><ol class="steps"><li>ทุกการพิมพ์บันทึกลงเครื่องก่อน (กล่องขาออก) แล้วส่งขึ้นเซิร์ฟเวอร์ — ไม่มีสัญญาณก็ไม่หาย</li><li>ทุกการแก้ไขเก็บประวัติพร้อมชื่อผู้แก้และเวลา ย้อนกลับได้</li><li>การลบเป็นการย้ายไปถังขยะ กู้คืนได้เสมอ</li><li>เครื่องนี้เก็บสำเนาข้อมูลกลุ่มอัตโนมัติ 15 ชุดล่าสุด</li></ol></div>' +
       '<div class="card"><div class="card-title">สถานะการส่ง</div><div>รอส่ง: <b>' + STATUS.pending + '</b> · ส่งไม่สำเร็จ: <b>' + STATUS.failed + '</b> · ' + (STATUS.online ? 'ออนไลน์' : 'ออฟไลน์') + '</div>' +
       (failed.length ? '<div class="warn-box" style="margin-top:8px">มี ' + failed.length + ' รายการที่เซิร์ฟเวอร์ปฏิเสธ (' + esc(failed[0].error || '') + ')</div><button class="btn sm gold" data-act="retry">ลองส่งใหม่</button>' : '') + '</div>' +
-      '<div class="card"><div class="card-title">💾 สำรองเป็นไฟล์</div><button class="btn sec block" data-act="backup">ดาวน์โหลดข้อมูลกลุ่มทั้งหมด (.json)</button></div>' +
-      '<div class="card"><div class="card-title">🕘 สำเนาในเครื่องนี้</div>' + (snaps.length ? snaps.map(s => '<div class="row" style="padding:4px 0;border-bottom:1px dashed var(--line)"><span class="grow">' + esc(thDateTime(s.at)) + '</span><button class="btn xs sec" data-act="dlsnap" data-id="' + esc(s.id) + '">ดาวน์โหลด</button></div>').join('') : '<div class="muted">ยังไม่มีสำเนา</div>') + '<div class="hint" style="margin-top:6px">ถ้าข้อมูลบนเซิร์ฟเวอร์เสียหาย ส่งไฟล์สำเนาให้ครูกู้คืนได้</div></div>' +
+      '<div class="card"><div class="card-title">📱 ข้อมูลอยู่ที่ไหนบ้าง</div><ol class="steps"><li><b>บนคลาวด์ (หลัก)</b> — ทุกอย่างที่ส่งแล้วอยู่ในฐานข้อมูลของโรงเรียน ล็อกอินเครื่องไหนก็เห็น เปลี่ยนมือถือ/ลบแอปก็ไม่หาย</li><li><b>ในเครื่องนี้ (สำรอง)</b> — แอปเก็บงานที่ยังไม่ได้ส่ง และสำเนาอัตโนมัติไว้ในเครื่อง ใช้ตอนไม่มีสัญญาณ หรือกู้คืนเมื่อข้อมูลบนคลาวด์ผิดพลาด</li><li><b>ไฟล์สำรอง (.json)</b> — ดาวน์โหลดเก็บไว้ใน Files/Google Drive ได้ตลอด ใช้กู้คืนได้ทั้งนักเรียนและครู</li></ol><div class="hint" style="margin-top:6px">หมายเหตุ: ถ้าลบแอปหรือล้างข้อมูลเบราว์เซอร์ ข้อมูล “ในเครื่อง” จะหาย แต่ข้อมูลบนคลาวด์ยังอยู่ — ดูให้ “รอส่ง = 0” ก่อนลบแอปเสมอ</div></div>' +
+      '<div class="card"><div class="card-title">💾 สำรองเป็นไฟล์</div><button class="btn sec block" data-act="backup">ดาวน์โหลดข้อมูลกลุ่มทั้งหมด (.json)</button>' +
+      '<label class="btn sec block" style="margin-top:8px">↩ กู้คืนจากไฟล์สำรอง (.json)<input type="file" accept=".json,application/json" data-restore hidden></label><div class="hint" style="margin-top:6px">การกู้คืนจะ <b>เพิ่มเฉพาะรายการที่หายไป หรือฉบับในไฟล์ที่ใหม่กว่า</b> ไม่เขียนทับงานล่าสุดของเพื่อน</div></div>' +
+      '<div class="card"><div class="card-title">🕘 สำเนาในเครื่องนี้</div>' + (snaps.length ? snaps.map(s => '<div class="row" style="padding:4px 0;border-bottom:1px dashed var(--line)"><span class="grow">' + esc(thDateTime(s.at)) + '</span><button class="btn xs gold" data-act="snaprestore" data-id="' + esc(s.id) + '">↩ กู้คืน</button> <button class="btn xs sec" data-act="dlsnap" data-id="' + esc(s.id) + '">ดาวน์โหลด</button></div>').join('') : '<div class="muted">ยังไม่มีสำเนา</div>') + '<div class="hint" style="margin-top:6px">ถ้าข้อมูลบนเซิร์ฟเวอร์เสียหาย ส่งไฟล์สำเนาให้ครูกู้คืนได้</div></div>' +
       '<a class="btn sec block" href="#/trash">🗑 ถังขยะ</a>', { back: '#/home' });
   }
 
@@ -431,6 +472,8 @@
     if (a === 'hub') { if (ME && ME.teacher) { location.hash = '#/home'; return; } html = viewHome(); }
     else if (a === 'home') html = viewHome();
     else if (a === 'synth') html = viewSynth();
+    else if (a === 'map') html = viewMap();
+    else if (a === 'listen') html = await viewListen();
     else if (a === 'calendar') html = viewCalendar();
     else if (a === 'trash') html = viewTrash();
     else if (a === 'safety') html = await viewSafety();
@@ -440,7 +483,18 @@
     const y = window.scrollY; $('#root').innerHTML = html; window.scrollTo(0, keep ? y : 0);
     afterRender();
   }
+  const LCACHE = {}; let LISTEN = [];
+  function viewMap() {
+    if (!GID) return viewNoGroup(); const pts = EXTRAS.pointsFrom(G(), D.group.name);
+    return shell('แผนที่ลงพื้นที่', seg(SEG_S, 'map') + '<div class="card"><div class="card-title">🗺 แผนที่ดนตรีพหุวัฒนธรรมของกลุ่ม</div><div class="muted">จุดจากบันทึกที่มีพิกัด GPS (' + pts.length + ' จุด) — แตะจุดเพื่อดูรายละเอียด</div>' + EXTRAS.legendHTML(pts) + '<div id="mapEl" class="map-box"></div></div>');
+  }
+  async function viewListen() {
+    if (!GID) return viewNoGroup();
+    LISTEN = await EXTRAS.resolveAudio(EXTRAS.audioCandidates(G(), GID, ''), B.getMedia, LCACHE);
+    return shell('ห้องฟัง', seg(SEG_S, 'listen') + '<div id="listenRoot">' + EXTRAS.listenHTML(LISTEN) + '</div>');
+  }
   async function afterRender() {
+    const ra = route().a; if (ra === 'map' && GID) EXTRAS.renderMap($('#mapEl'), EXTRAS.pointsFrom(G(), D.group.name)); if (ra === 'listen') EXTRAS.bindListen($('#listenRoot'), LISTEN);
     setBadge();
     const ids = $$('[data-mid]').map(e => e.dataset.mid);
     hydrate(); if (await ensureMedia(ids)) { const mb = $('#mediaBox'); if (mb && CUR) mb.innerHTML = mediaBlock(curData()); hydrate(); }
@@ -597,6 +651,9 @@
     safety: () => { location.hash = '#/safety'; },
     retry: async () => { await B.retryFailed(); render(true); },
     backup: async () => { const media = await groupMediaMap(); M.saveJSON({ app: 'mcm5g', v: 2, exportedAt: Date.now(), by: me(), gid: GID, group: D.group, records: D.records, docs: D.docs, history: D.history, personal: { [ME.sid]: D.personal }, media }, 'สำรอง-กลุ่ม-' + (D.group ? D.group.name : 'x') + '-' + M.today() + '.json'); },
+    diag: () => diagModal(),
+    bell: () => bellModal(),
+    snaprestore: async bt => { const s = (await B.snapshots('g:' + GID)).find(x => x.id === bt.dataset.id); if (s && confirm('กู้คืนรายการที่หายไปจากสำเนาวันที่ ' + thDateTime(s.at) + '?')) restoreGroupData(s.data); },
     dlsnap: async bt => { const s = (await B.snapshots('g:' + GID)).find(x => x.id === bt.dataset.id); if (s) M.saveJSON({ app: 'mcm5g-snap', v: 2, gid: GID, at: s.at, data: s.data }, 'สำเนา-' + GID + '-' + s.at + '.json'); },
     acdocx: async bt => acRun(bt, ctx => REPORT.exportDocx(G(), ctx)),
     acpdf: async bt => acRun(bt, ctx => REPORT.exportPdf(G(), ctx, (i, n) => { bt.textContent = 'หน้า ' + i + '/' + n + '…'; })),
@@ -611,6 +668,21 @@
       bt.disabled = false; bt.textContent = old;
     }
   };
+
+  /* ---------- กู้คืนข้อมูลกลุ่ม (เพิ่มเฉพาะที่หาย/ใหม่กว่า) ---------- */
+  async function restoreGroupData(data, media) {
+    if (!GID || ME.teacher) return; const upd = {}; let n = 0;
+    Object.keys(data.records || {}).forEach(kind => Object.keys(data.records[kind] || {}).forEach(rid => { const r = data.records[kind][rid], c = (D.records[kind] || {})[rid]; if (r && (!c || (r.updatedAt || 0) > (c.updatedAt || 0))) { upd['records/' + GID + '/' + kind + '/' + rid] = r; n++; } }));
+    Object.keys(data.docs || {}).forEach(k => { const d = data.docs[k], c = (D.docs || {})[k]; if (d && (!c || (d._updatedAt || 0) > (c._updatedAt || 0))) { upd['docs/' + GID + '/' + k] = d; n++; } });
+    for (const id of Object.keys(media || {})) { const m = Object.assign({}, media[id]); delete m.id; if (!(await B.getMedia(GID, id))) W(B.putMedia(GID, id, m)); }
+    if (n) { await W(B.update('', upd)); log('restore', '-', 'restore', null); }
+    toast(n ? 'กู้คืนแล้ว ' + n + ' รายการ ✓' : 'ไม่มีรายการที่ต้องกู้คืน — ข้อมูลบนคลาวด์ครบ/ใหม่กว่าแล้ว', 3500);
+  }
+  document.addEventListener('change', async e => {
+    if (!e.target.matches('[data-restore]')) return; const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    try { const o = JSON.parse(await f.text()); if (o.app === 'mcm5g' && o.gid === GID) restoreGroupData({ records: o.records, docs: o.docs }, o.media); else if (o.app === 'mcm5g-snap' && o.gid === GID) restoreGroupData(o.data); else toast('ไฟล์นี้ไม่ใช่ข้อมูลของกลุ่มคุณ', 3500); }
+    catch (er) { toast('อ่านไฟล์ไม่ได้: ' + er.message, 3500); }
+  });
 
   /* ---------- start ---------- */
   window.addEventListener('hashchange', () => { flushAll(); if (!USER) renderLogin(); else render(); });

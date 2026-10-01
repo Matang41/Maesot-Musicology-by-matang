@@ -64,7 +64,11 @@
     name: 'firebase',
     async init() {
       await window.MC.loadLibs('fb');
-      if (!firebase.apps.length) firebase.initializeApp(C.firebase);
+      /* ถ้าเว็บอยู่บน Firebase Hosting ให้ใช้โดเมนเดียวกันเป็น authDomain → ล็อกอินได้ทุกเบราว์เซอร์ (รวม iPhone ที่ติดตั้งเป็นแอป) */
+      const cfg = Object.assign({}, C.firebase); const h = location.hostname;
+      if (/\.(web\.app|firebaseapp\.com)$/.test(h)) cfg.authDomain = h;
+      this.sameOriginAuth = cfg.authDomain === h; this.authDomain = cfg.authDomain;
+      if (!firebase.apps.length) firebase.initializeApp(cfg);
       this.db = firebase.database(); this.auth = firebase.auth();
       try { await this.auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL); } catch (e) { /* ignore */ }
       try { await this.auth.getRedirectResult(); } catch (e) { B.authError = e; }
@@ -74,10 +78,11 @@
     async signIn(opts) {
       const p = new firebase.auth.GoogleAuthProvider();
       const params = { prompt: 'select_account' }; if (opts && opts.hd) params.hd = opts.hd; p.setCustomParameters(params);
-      const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-      try { if (standalone && /iPhone|iPad|iPod/.test(navigator.userAgent)) throw { code: 'use-redirect' }; await this.auth.signInWithPopup(p); }
+      /* ใช้ popup ก่อนเสมอ (ทำงานข้ามโดเมนได้) — redirect ใช้เฉพาะเมื่อเว็บอยู่โดเมนเดียวกับ authDomain เท่านั้น
+         เพราะ redirect ข้ามโดเมน (github.io ↔ firebaseapp.com) ถูก Safari/Chrome บล็อกคุกกี้ ทำให้ล็อกอินค้าง */
+      try { await this.auth.signInWithPopup(p); }
       catch (e) {
-        if (['use-redirect', 'auth/popup-blocked', 'auth/operation-not-supported-in-this-environment', 'auth/cancelled-popup-request', 'auth/web-storage-unsupported'].includes(e.code)) return this.auth.signInWithRedirect(p);
+        if (this.sameOriginAuth && ['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment', 'auth/web-storage-unsupported'].includes(e.code)) return this.auth.signInWithRedirect(p);
         throw e;
       }
     },
@@ -131,7 +136,7 @@
     return new Promise(res => {
       const t = DemoImpl.tree(); const ro = t.roster || {};
       const w = document.createElement('div'); w.className = 'modal'; w.style.alignItems = 'center';
-      const tch = [{ email: C.teacherEmails[0] || 'teacher@' + C.auth.domain, name: '👩‍🏫 ครูตังค์ (สาธิต)' }];
+      const tch = [{ email: C.teacherEmails[0] || 'teacher@' + C.auth.domain, name: '👩‍🏫 ' + (C.course.teacher || 'ครู') + ' (สาธิต)' }];
       const list = teacher ? tch : tch.concat(Object.keys(ro).sort().map(s => ({ email: s + '@' + C.auth.domain, name: ro[s].name, room: ro[s].room })));
       w.innerHTML = '<div class="modal-in" style="border-radius:20px;max-width:440px"><h3>เลือกบัญชีสาธิต</h3><div class="muted" style="margin-bottom:10px">โหมดสาธิต: จำลองการล็อกอินด้วย Google ของโรงเรียน (เปิดหลายแท็บเพื่อจำลองสมาชิกหลายคน)</div>' +
         list.map((u, i) => '<button class="acct" data-i="' + i + '"><b>' + u.name + '</b><span>' + u.email + (u.room ? ' · ม.' + u.room : '') + '</span></button>').join('') +
@@ -236,6 +241,27 @@
     failedOps: () => IDB.all('failed'),
     async retryFailed() { for (const op of await IDB.all('failed')) { await IDB.del('failed', op.id); delete op.error; await IDB.put('outbox', op); send(op).catch(() => { }); } refreshCounts(); },
     onStatus(cb) { statusCbs.add(cb); cb(Object.assign({}, status)); return () => statusCbs.delete(cb); },
+    authErrorText(e) {
+      const code = (e && e.code) || ''; const host = location.hostname;
+      const T = {
+        'auth/unauthorized-domain': 'โดเมน ' + host + ' ยังไม่ได้รับอนุญาต → Firebase › Authentication › Settings › Authorized domains › เพิ่ม ' + host,
+        'auth/operation-not-allowed': 'ยังไม่ได้เปิดการล็อกอินด้วย Google → Firebase › Authentication › Sign-in method › Google › Enable',
+        'auth/popup-blocked': 'เบราว์เซอร์บล็อกหน้าต่างล็อกอิน → อนุญาต pop-up สำหรับเว็บนี้ แล้วกดใหม่',
+        'auth/popup-closed-by-user': 'ปิดหน้าต่างล็อกอินก่อนเสร็จ — กดเข้าสู่ระบบใหม่อีกครั้ง',
+        'auth/cancelled-popup-request': 'มีหน้าต่างล็อกอินเปิดอยู่แล้ว — ปิดแล้วกดใหม่',
+        'auth/network-request-failed': 'เชื่อมต่ออินเทอร์เน็ตไม่ได้ — ตรวจสัญญาณแล้วลองใหม่',
+        'auth/web-storage-unsupported': 'เบราว์เซอร์นี้ปิดการเก็บข้อมูล (โหมดส่วนตัว/บล็อกคุกกี้) — เปิดด้วย Safari/Chrome ปกติ',
+        'auth/operation-not-supported-in-this-environment': 'แอปที่ติดตั้งบนหน้าจอโฮมล็อกอินด้วยวิธีนี้ไม่ได้ — เปิดผ่านเบราว์เซอร์ หรือย้ายเว็บไป Firebase Hosting (ดูคู่มือ)',
+        'auth/internal-error': 'ระบบล็อกอินขัดข้อง — ถ้าเปิดจากแอปบนหน้าจอโฮม ให้ลองเปิดผ่านเบราว์เซอร์',
+        'auth/too-many-requests': 'ลองหลายครั้งเกินไป — รอสักครู่แล้วลองใหม่'
+      };
+      return (T[code] || ((e && e.message) || String(e))) + (code ? ' [' + code + ']' : '');
+    },
+    diagnostics() {
+      const ua = navigator.userAgent; const sa = window.matchMedia('(display-mode: standalone)').matches || !!navigator.standalone;
+      return { mode: this.mode, host: location.hostname, authDomain: impl && impl.authDomain, sameOriginAuth: !!(impl && impl.sameOriginAuth), online: status.online, navigatorOnline: navigator.onLine,
+        standalone: sa, ios: /iPhone|iPad|iPod/.test(ua), browser: (/CriOS|Chrome/.test(ua) ? 'Chrome' : /Safari/.test(ua) ? 'Safari' : /Firefox/.test(ua) ? 'Firefox' : 'อื่น ๆ'), pending: status.pending, failed: status.failed, lastAuthError: this.authError ? this.authErrorText(this.authError) : '' };
+    },
     sidFromEmail(email) {
       email = String(email || '').toLowerCase(); const dom = '@' + C.auth.domain.toLowerCase();
       if (!email.endsWith(dom)) return null; const sid = email.slice(0, -dom.length);
