@@ -1,6 +1,6 @@
 /* Service worker: ให้แอปเปิดและบันทึกข้อมูลได้แม้ไม่มีสัญญาณ (ตอนลงพื้นที่) */
-const CACHE = 'mcm5-v7';
-const SHELL = ['./', 'index.html', 'teacher.html', 'style.css', 'config.js', 'core.js', 'report.js', 'extras.js', 'backend.js', 'student.js', 'teacher.js',
+const CACHE = 'mcm5-v9';
+const SHELL = ['./', 'index.html', 'teacher.html', 'style.css', 'config.js', 'core.js', 'consent.js', 'report.js', 'extras.js', 'backend.js', 'student.js', 'teacher.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-32.png',
   'icons/logo-full.png', 'icons/logo-mark-512.png', 'icons/school-logo.png'];
 const CDN = ['cdnjs.cloudflare.com', 'www.gstatic.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];

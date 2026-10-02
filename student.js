@@ -13,7 +13,7 @@
   const MEDIA = {}; let subs = [], gsubs = [];
   const CAL = { y: new Date().getFullYear(), m: new Date().getMonth(), sel: today() };
   let STATUS = { online: true, pending: 0, failed: 0 };
-  function blankD() { return { roster: null, group: null, records: {}, docs: {}, history: {}, personal: {}, calendar: {}, config: {}, gGrade: null, sGrade: null, tc: {}, ready: false }; }
+  function blankD() { return { roster: null, group: null, records: {}, docs: {}, history: {}, personal: {}, calendar: {}, config: {}, consents: {}, gGrade: null, sGrade: null, tc: {}, ready: false }; }
   const me = () => ({ sid: ME.sid, name: ME.name });
   const G = () => ({ records: D.records || {}, docs: D.docs || {}, history: D.history || {} });
   const W = p => Promise.resolve(p).catch(e => { toast('บันทึกขึ้นเซิร์ฟเวอร์ไม่สำเร็จ: ' + ((e && (e.code || e.message)) || e) + ' (ข้อมูลยังอยู่ในเครื่อง)', 4500); });
@@ -74,7 +74,8 @@
     const sid = B.sidFromEmail(u.email);
     if (!sid) { renderBlocked('ใช้ได้เฉพาะบัญชีนักเรียน @' + C.auth.domain, 'บัญชี ' + u.email + ' ไม่ใช่อีเมลนักเรียนของโรงเรียน (รูปแบบ รหัสนักเรียน@' + C.auth.domain + ')'); return; }
     $('#root').innerHTML = '<div class="empty" style="padding-top:30vh">กำลังโหลดข้อมูล…</div>';
-    let rErr = null; await first('roster/' + sid, v => { D.roster = v; }, e => { rErr = e; });
+    let rErr = null, rGot = false, rWait = false; await first('roster/' + sid, v => { D.roster = v; rGot = true; if (rWait) { rWait = false; onAuth(u); } }, e => { rErr = e; });
+    if (!rGot && !rErr) { rWait = true; renderBlocked('ยังเชื่อมต่อฐานข้อมูลไม่ได้', (navigator.onLine === false ? 'เครื่องนี้ออฟไลน์อยู่' : 'สัญญาณอินเทอร์เน็ตช้าหรือหลุด') + ' — การเข้าใช้ครั้งแรกบนเครื่องนี้ต้องมีอินเทอร์เน็ต ระบบจะเข้าให้เองทันทีเมื่อเชื่อมต่อได้ (บัญชี ' + u.email + ')', '<button class="btn gold block" data-act="reload">↻ ลองใหม่</button>' + diagBtn()); return; }
     if (rErr) { renderBlocked('ล็อกอินสำเร็จ แต่อ่านข้อมูลไม่ได้', 'บัญชี ' + u.email + ' ได้รับการปฏิเสธจากฐานข้อมูล (' + ((rErr && (rErr.code || rErr.message)) || rErr) + ') — ครูตรวจว่าเผยแพร่ Rules แล้ว และนำเข้ารายชื่อรหัส ' + sid + ' แล้ว', diagBtn()); return; }
     if (!D.roster) { renderBlocked('ไม่พบรหัส ' + sid + ' ในรายชื่อ', 'ครูยังไม่ได้นำเข้ารายชื่อของคุณ หรือรหัสไม่ตรง กรุณาแจ้งครู'); return; }
     if (D.roster.left) { renderBlocked('บัญชีนี้ไม่อยู่ในรายชื่อรายวิชาแล้ว', 'ครูได้นำรหัส ' + sid + ' ออกจากรายชื่อ (' + (D.roster.leftNote || 'ย้ายออก') + ') หากไม่ถูกต้องกรุณาแจ้งครู'); return; }
@@ -84,6 +85,7 @@
       first('personal/' + sid, v => { D.personal = v || {}; }),
       first('calendar', v => { D.calendar = v || {}; }),
       first('config', v => { D.config = v || {}; M.applyInfo(D.config); }, () => { }),
+      first('consents/' + sid, v => { D.consents = v || {}; }, () => { }),
       first('grades/students/' + sid, v => { D.sGrade = v; }, () => { })
     ]);
     D.ready = true; render();
@@ -121,7 +123,7 @@
     await Promise.all([first('calendar', v => { D.calendar = v || {}; }, () => { }), first('config', v => { D.config = v || {}; M.applyInfo(D.config); }, () => { })]);
     subGroup(gid); D.ready = true; if (route().a === 'hub') location.hash = '#/home'; render();
   }
-  const WRITE_ACTS = ['new', 'delrec', 'restore', 'delmedia', 'gps', 'clearsign', 'assign', 'flag', 'roles', 'propose', 'pick', 'rec'];
+  const WRITE_ACTS = ['consent', 'done', 'new', 'delrec', 'restore', 'delmedia', 'gps', 'clearsign', 'assign', 'flag', 'roles', 'propose', 'pick', 'rec'];
 
   /* ---------- คอมเมนต์ครู + การแจ้งเตือน ---------- */
   function tcHTML(rid) { const c = D.tc && D.tc[rid]; return c ? '<div class="tcomment"><b>💬 ครูคอมเมนต์</b> <span class="muted">· ' + esc(thDateTime(c.at)) + '</span><div style="margin-top:4px">' + nl2(c.text) + '</div></div>' : ''; }
@@ -191,7 +193,7 @@
   }
   function hydrate(root) { $$('[data-mid]', root || document).forEach(el => { const m = MEDIA[el.dataset.mid]; if (m && el.getAttribute('src') !== m.d) el.src = m.d; }); }
   async function addMedia(type, d) {
-    if (!CUR || CUR.single) return; const rec = curData(); const ids = M.mediaIds(rec);
+    if (!CUR || CUR.single) return; if (String(d || '').length > 2900000) { toast('ไฟล์ใหญ่เกินไป (เกิน ~2 MB) — ลองอัดเสียงให้สั้นลง หรือถ่ายภาพใหม่', 4500); return; } const rec = curData(); const ids = M.mediaIds(rec);
     const n = ids.filter(id => ((MEDIA[id] || {}).type || 'image') === type).length;
     if (n >= (type === 'image' ? 10 : 3)) { toast(type === 'image' ? 'แนบรูปได้สูงสุด 10 รูปต่อรายการ' : 'แนบเสียงได้สูงสุด 3 ไฟล์ต่อรายการ'); return; }
     const mid = B.uid(), now = Date.now(); const obj = { type, d, by: me(), at: now, kind: CUR.kind, rid: CUR.rid };
@@ -292,7 +294,7 @@
     const myTasks = C.tasks.filter(t => assignees(t.id).includes(ME.sid) || t.scope === 'individual');
     const groupCard = '<div class="card purple"><div class="row"><div class="grow"><div class="muted">กลุ่มของฉัน · ม.' + esc(D.group.room) + '</div><h2 style="margin:2px 0 6px;color:#fbe7a1">' + esc(D.group.name) + '</h2></div><button class="btn gold sm" data-act="roles">🎭 บทบาท</button></div>' +
       mem.map(m => '<div class="mem" style="border-color:rgba(255,255,255,.18)">' + avatar(m.name, m.sid === ME.sid ? 'me' : '') + '<div class="grow"><div>' + esc(m.name) + (m.sid === ME.sid ? ' <span class="tag gold">ฉัน</span>' : '') + '</div><div class="rolechips">' + (m.roles.length ? m.roles.map(r => { const x = roleById(r); return x ? '<span class="tag" style="background:rgba(255,255,255,.15);color:#fff">' + x.icon + ' ' + esc(x.name) + '</span>' : ''; }).join('') : '<span class="muted">ยังไม่เลือกบทบาท</span>') + '</div></div></div>').join('') + '</div>';
-    const nextCard = next ? '<div class="card gold"><div class="card-title">🗓 การลงพื้นที่ครั้งถัดไป</div>' + M.eventCard(next, { [GID]: D.group }) + '<div class="row wrap"><button class="btn sm sec" data-act="ics" data-id="' + esc(next.id) + '">📲 เพิ่มลงปฏิทินในเครื่อง</button><a class="btn sm ghost" href="#/calendar">ดูปฏิทินทั้งหมด ›</a></div></div>'
+    const nextCard = next ? '<div class="card gold"><div class="card-title">🗓 การลงพื้นที่ครั้งถัดไป</div>' + M.eventCard(next, { [GID]: D.group }) + '<div class="row wrap"><button class="btn sm sec" data-act="ics" data-id="' + esc(next.id) + '">📲 เพิ่มลงปฏิทินในเครื่อง</button><a class="btn sm ghost" href="#/calendar">ดูปฏิทินทั้งหมด ›</a>' + consentBar(next) + '</div></div>'
       : '<div class="card gold"><div class="card-title">🗓 ยังไม่มีนัดลงพื้นที่</div><div class="muted">หัวหน้ากลุ่มเสนอวันลงพื้นที่ให้ครูอนุมัติได้ในหน้าปฏิทิน</div><a class="btn sm sec" style="margin-top:8px" href="#/calendar">ไปปฏิทิน ›</a></div>';
     const tasks = C.tasks.map(t => {
       const p = M.taskProgress(t, G(), D.personal), [sc, st] = statusOf(t, p), g = gradeFor(t.id), as = assignees(t.id);
@@ -309,7 +311,7 @@
       (mine.roles.length ? '' : '<div class="tip" style="margin:10px 0 0">ยังไม่ได้เลือกบทบาทในกลุ่ม <button class="btn xs gold" data-act="roles">เลือกบทบาท</button></div>') + '</div>';
     const bl = EXTRAS.badges(G(), mem, ME.sid, D.personal); const meB = bl.filter(b => b.scope === 'me'), grB = bl.filter(b => b.scope === 'group');
     const bdgCard = '<div class="card"><div class="card-title">🏅 ตราสัญลักษณ์ <span class="muted">ของฉัน ' + meB.filter(b => b.got).length + '/' + meB.length + ' · กลุ่ม ' + grB.filter(b => b.got).length + '/' + grB.length + '</span></div>' + EXTRAS.badgesHTML(meB) + '<div class="muted" style="margin:10px 0 6px">ตราของกลุ่ม</div>' + EXTRAS.badgesHTML(grB) + '</div>';
-    return shell(D.group.name, groupCard + nextCard + mineCard + bdgCard + '<h3 style="margin:16px 4px 8px">งานของกลุ่ม (หน่วยที่ 2)</h3>' + tasks + contrib + feed +
+    return shell(D.group.name, groupCard + nextCard + goalsCard(mem, mine) + mineCard + bdgCard + '<h3 style="margin:16px 4px 8px">งานของกลุ่ม (หน่วยที่ 2)</h3>' + tasks + contrib + feed +
       '<div class="card"><div class="row"><div class="grow"><b>' + esc(ME.name) + '</b><div class="muted">' + esc(ME.email) + '</div></div><button class="btn sm sec" data-act="safety">🛟 ความปลอดภัยข้อมูล</button></div><button class="btn sm bad block" style="margin-top:10px" data-act="logout">ออกจากระบบ</button></div>');
   }
 
@@ -322,11 +324,11 @@
     const g = gradeFor(t.id), as = assignees(t.id), p = M.taskProgress(t, G(), D.personal);
     const flags = t.scope === 'individual' ? (D.personal && D.personal.flags) : (D.group && D.group.flags); const fl = flags && flags[t.id];
     let h = '<div class="card"><div class="task"><div class="ic">' + t.icon + '</div><div class="grow"><h3>' + esc(t.name) + '</h3><div class="muted">' + esc(t.indicator) + '</div><div style="margin:4px 0;font-size:.92rem">' + esc(t.desc) + '</div></div></div>';
-    if (M.LIST_KINDS.includes(t.kind)) h += '<div class="bar" style="margin-top:6px"><i style="width:' + Math.min(100, p.n / p.min * 100) + '%"></i></div><div class="muted">กลุ่มทำแล้ว ' + p.n + ' รายการ (ขั้นต่ำ ' + p.min + ')</div>';
+    if (M.LIST_KINDS.includes(t.kind)) h += '<div class="bar" style="margin-top:6px"><i style="width:' + Math.min(100, p.n / p.min * 100) + '%"></i></div><div class="muted">กลุ่มทำแล้ว ' + p.n + ' รายการ (ขั้นต่ำ ' + p.min + ')' + (p.drafts ? ' · <span style="color:var(--bad)">ร่าง ' + p.drafts + ' รายการยังไม่นับ</span>' : '') + '</div>';
     if (t.scope === 'group' && GID) h += '<div class="row wrap" style="margin-top:8px;gap:6px"><span class="muted">ผู้รับผิดชอบ:</span>' + (as.length ? as.map(s => avatar(memberName(s), 'sm' + (s === ME.sid ? ' me' : ''))).join('') : '<span class="muted">—</span>') +
       '<button class="btn xs ' + (as.includes(ME.sid) ? 'sec' : 'gold') + '" data-act="assign" data-id="' + t.id + '">' + (as.includes(ME.sid) ? 'ถอนตัว' : '＋ รับงานนี้') + '</button></div>';
     h += rubricHTML(t);
-    if (g) h += '<div class="tip" style="margin-top:8px">คะแนน: <b>' + esc(g.s) + '/' + maxOf(t) + '</b>' + (g.adj ? ' (ปรับรายบุคคล ' + (g.adj > 0 ? '+' : '') + esc(g.adj) + ')' : '') + (g.c ? '<br>ความเห็นครู: ' + nl2(g.c) : '') + '</div>';
+    if (g) h += '<div class="tip" style="margin-top:8px">คะแนน: <b>' + esc(g.s) + '/' + maxOf(t) + '</b>' + (g.adj ? ' (ปรับรายบุคคล ' + (g.adj > 0 ? '+' : '') + esc(g.adj) + ')' : '') + (D.sGrade && D.sGrade.fw && D.sGrade.fw.pct && (C.fieldTasks || []).includes(t.id) ? '<br><span class="muted">คิดตามสัดส่วนการลงพื้นที่: ร่วม ' + (D.sGrade.fw.total - D.sGrade.fw.deny) + '/' + D.sGrade.fw.total + ' ครั้ง (ผู้ปกครองไม่อนุญาต ' + D.sGrade.fw.deny + ' ครั้ง → หัก ' + D.sGrade.fw.pct + '%)</span>' : '') + (g.c ? '<br>ความเห็นครู: ' + nl2(g.c) : '') + '</div>';
     h += '<button class="btn ' + (fl ? 'sec' : 'gold') + ' block" style="margin-top:10px" data-act="flag" data-id="' + t.id + '">' + (fl ? '✓ แจ้งครูแล้วโดย ' + esc(short((fl.by || {}).name)) + ' (กดเพื่อยกเลิก)' : '✋ งานนี้เสร็จแล้ว — แจ้งครูให้ตรวจ') + '</button>';
     return h + '</div>';
   }
@@ -338,6 +340,7 @@
     const items = list.length ? list.map(r => {
       const s = F.summary(r), c = M.commObj(r), cb = r.createdBy || {};
       return '<a class="card link" href="#/' + kind + '/' + r.id + '" style="border-left:5px solid ' + (c ? c.color : 'var(--p200)') + '"><div class="row">' + avatar(cb.name, cb.sid === ME.sid ? 'me' : '') + '<div class="grow"><div class="rec-t">' + esc(s.t) + '</div><div class="rec-s">' + esc(s.s) + '</div>' +
+        (() => { const k = M.checkRecord(kind, r); return !k.valid ? '<div><span class="chip-st draft">ร่าง · ยังไม่นับ — ขาด ' + esc(k.req.map(x => x.label).join(', ')) + '</span></div>' : k.open.length ? '<div><span class="chip-st warn">⚠ ยังไม่มี: ' + esc(k.open.map(x => x.label.replace(/^[^ก-๙A-Za-z]+/, '')).slice(0, 3).join(', ')) + (k.open.length > 3 ? ' +' + (k.open.length - 3) : '') + '</span></div>' : ''; })() +
         '<div class="rec-s" style="font-size:.74rem">📝 ' + esc(short(cb.name)) + ' · ' + esc(thDateTime(r.createdAt)) + (r.updatedBy && r.updatedAt - r.createdAt > 60000 ? ' · แก้ล่าสุด ' + esc(short(r.updatedBy.name)) + ' ' + esc(ago(r.updatedAt)) : '') + '</div></div><div class="muted">' + (M.mediaIds(r).length ? '📎' + M.mediaIds(r).length + ' ' : '') + (D.tc && D.tc[r.id] ? '<span title="ครูคอมเมนต์">💬</span> ' : '') + '›</div></div></a>';
     }).join('') : '<div class="empty"><div class="big">' + F.icon + '</div>กลุ่มยังไม่มีรายการ<br>กดปุ่ม ＋ เพื่อเริ่มบันทึก</div>';
     return shell(F.title, seg(kind === 'notes' || kind === 'interviews' ? SEG_F : SEG_A, kind) + taskCard(t) + items + '<div style="text-align:center"><a class="btn sm ghost" href="#/trash">🗑 ถังขยะ (กู้คืนรายการที่ลบ)</a></div>' +
@@ -375,7 +378,7 @@
       case 'date': return '<div class="f">' + L + '<input type="date"' + d + ' value="' + esc(v) + '"></div>';
       case 'time': return '<div class="f">' + L + '<input type="time"' + d + ' value="' + esc(v) + '"></div>';
       case 'area': return '<div class="f">' + L + '<textarea' + d + ' rows="' + (f.rows || 3) + '" placeholder="' + esc(f.ph || '') + '">' + esc(v) + '</textarea>' + by + '</div>';
-      case 'select': { const ol = optList(f.opts, f.k); if (f.opts === 'events' && !ol.length) return ''; return '<div class="f">' + L + '<select' + d + '><option value="">— เลือก —</option>' + ol.map(o => '<option value="' + esc(o[0]) + '"' + (o[0] === v ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('') + '</select>' + by + '</div>'; }
+      case 'select': { const ol = optList(f.opts, f.k); if (f.opts === 'events' && !ol.length) return ''; if (f.opts === 'comm' && v && !ol.some(o => o[0] === v)) { const hc = M.commById(v); if (hc) ol.push([v, hc.emoji + ' ' + hc.name + ' (ครูนำออกจากตัวเลือกแล้ว)']); } return '<div class="f">' + L + '<select' + d + '><option value="">— เลือก —</option>' + ol.map(o => '<option value="' + esc(o[0]) + '"' + (o[0] === v ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('') + '</select>' + by + '</div>'; }
       case 'chips': return '<div class="f"><div class="lab">' + esc(f.label) + '</div><div class="chips">' + f.opts.map(o => '<button type="button" data-chip="' + f.k + '" data-v="' + esc(o) + '" class="' + ((v || []).includes(o) ? 'on' : '') + '">' + esc(o) + '</button>').join('') + '</div>' + by + '</div>';
       case 'check': return '<div class="f"><label class="chk"><input type="checkbox"' + d + (v ? ' checked' : '') + '><span>' + esc(f.label) + req + '</span></label></div>';
       case 'scale': return '<div class="f"><div class="lab">' + esc(f.label) + '</div><div class="scale">' + Array.from({ length: f.n || 5 }, (_, i) => '<button type="button" data-scale="' + f.k + '" data-v="' + (i + 1) + '" class="' + (v === i + 1 ? 'on' : '') + '">' + (i + 1) + '</button>').join('') + '</div></div>';
@@ -393,7 +396,7 @@
     if (!rec) return shell(F.title, '<div class="empty">กำลังโหลด…</div>', { back: '#/' + kind });
     if (rec.deleted) { CUR = null; return shell(F.title, '<div class="warn-box">รายการนี้ถูกลบแล้ว</div><a class="btn" href="#/trash">ไปถังขยะเพื่อกู้คืน</a>', { back: '#/' + kind }); }
     return shell(F.title, tcHTML(rid) + '<div id="metaBox">' + M.metaHTML(rec) + '</div><div class="card">' + formBody(kind, rec, false) + '</div>' +
-      '<div class="row wrap"><button class="btn grow" data-go="#/' + kind + '">✓ เสร็จ กลับไปรายการ</button><button class="btn sec" data-act="history">🕘 ประวัติ</button><button class="btn bad" data-act="delrec">🗑 ลบ</button></div><div class="muted" style="text-align:center;margin-top:8px">บันทึกอัตโนมัติทุกครั้งที่พิมพ์ · เพื่อนในกลุ่มเห็นทันที</div>', { back: '#/' + kind });
+      '<div class="row wrap"><button class="btn grow" style="flex-basis:100%" data-act="done" data-to="#/' + kind + '">✓ เสร็จ — ตรวจความครบถ้วน</button><button class="btn sec" data-act="history">🕘 ประวัติ</button><button class="btn bad" data-act="delrec">🗑 ลบ</button></div><div class="muted" style="text-align:center;margin-top:8px">บันทึกอัตโนมัติทุกครั้งที่พิมพ์ · เพื่อนในกลุ่มเห็นทันที</div>', { back: '#/' + kind });
   }
   function viewSingle(kind) {
     const F = FORMS[kind], t = taskById(F.task);
@@ -427,7 +430,7 @@
     return shell('ห้องประมวลผลกลาง', seg(SEG_S, 'synth') +
       '<div class="card purple"><div class="card-title" style="color:#fbe7a1">🧩 ห้องประมวลผลกลางของกลุ่ม</div><div class="muted">ระบบรวบรวมข้อมูลจากสมาชิกทุกคนอัตโนมัติ ใช้อภิปรายผลในรายงานและวางแผนว่าใครควรเก็บข้อมูลอะไรเพิ่ม</div></div>' +
       '<div class="card"><div class="card-title">✅ ความพร้อมก่อนส่ง</div>' + (needs.length ? '<ul style="margin:0;padding-left:20px">' + needs.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>' : '<b style="color:var(--ok)">ครบทุกงานแล้ว 🎉</b>') +
-      (noRec.length ? '<div class="tip" style="margin:10px 0 0">สมาชิกที่ยังไม่ได้สร้างรายการ: ' + noRec.map(x => esc(short(x.name))).join(', ') + ' — แบ่งงานให้ทุกคนมีส่วนร่วม</div>' : '') + '</div>' +
+      (noRec.length ? '<div class="tip" style="margin:10px 0 0">สมาชิกที่ยังไม่ได้สร้างรายการ: ' + noRec.map(x => esc(short(x.name))).join(', ') + ' — ทุกคนต้องมีชื่อในงานอย่างน้อย 1 ครั้งก่อนกลุ่มจะส่งรายงานได้</div>' : '') + '</div>' +
       '<div class="card"><div class="card-title">🗺 ข้อมูลแต่ละชุมชน</div>' + (sy.coverage.length ? '<div class="scroll-x"><table class="mini"><tr><th>ชุมชน</th><th>ภาคสนาม</th><th>สัมภาษณ์</th><th>วิเคราะห์</th><th>บทบาท</th></tr>' + sy.coverage.map(x => '<tr><td>' + x.c.emoji + ' ' + esc(x.c.name) + '</td><td>' + x.notes + '</td><td>' + x.interviews + '</td><td>' + x.analyses + '</td><td>' + x.roles + '</td></tr>').join('') + '</table></div>' : '<div class="muted">ยังไม่มีข้อมูล</div>') +
       (notCov.length ? '<div class="hint" style="margin-top:6px">ชุมชนที่ยังไม่มีข้อมูล: ' + notCov.map(c => c.emoji + ' ' + esc(c.name)).join(', ') + '</div>' : '') + '</div>' +
       '<div class="card"><div class="card-title">🎼 ตารางเปรียบเทียบเครื่องดนตรี</div>' + (sy.instruments.length ? '<div class="scroll-x"><table class="mini"><tr><th>เครื่องดนตรี</th><th>ชุมชน</th><th>ประเภท</th><th>สีสันเสียง</th><th>ระบบเสียง</th><th>ความเร็ว</th></tr>' + sy.instruments.map(r => '<tr><td>' + esc(r.inst) + '</td><td>' + esc(r.c ? r.c.name : '') + '</td><td>' + esc(r.classify) + '</td><td>' + esc(r.timbre) + '</td><td>' + esc(r.scale) + '</td><td>' + esc(r.tempo) + '</td></tr>').join('') + '</table></div>' : '<div class="muted">เพิ่ม “วิเคราะห์องค์ประกอบดนตรี” เพื่อให้ตารางนี้แสดงผล</div>') + '</div>' +
@@ -440,7 +443,7 @@
   /* ---------- ปฏิทิน ---------- */
   function viewCalendar() {
     const evs = myEvents(); const day = evs.filter(e => e.date === CAL.sel); const up = evs.filter(e => e.date >= today() && e.status !== 'cancelled');
-    const act = e => '<button class="btn xs sec" data-act="ics" data-id="' + esc(e.id) + '">📲 ลงปฏิทินเครื่อง</button>';
+    const act = e => '<button class="btn xs sec" data-act="ics" data-id="' + esc(e.id) + '">📲 ลงปฏิทินเครื่อง</button>' + consentBar(e);
     return shell('ปฏิทินลงพื้นที่', M.monthGrid(CAL.y, CAL.m, evs, CAL.sel) +
       '<h3 style="margin:4px 4px 8px">' + esc(thDate(CAL.sel, true)) + '</h3>' + (day.length ? day.map(e => M.eventCard(e, { [GID]: D.group }, { actions: act })).join('') : '<div class="muted" style="margin:0 4px 12px">ไม่มีนัดในวันนี้</div>') +
       (GID ? '<button class="btn gold block" data-act="propose">＋ เสนอวันลงพื้นที่ของกลุ่ม (รอครูอนุมัติ)</button>' : '') +
@@ -480,10 +483,11 @@
     else if (FORMS[a] && FORMS[a].single) html = viewSingle(a);
     else if (FORMS[a]) html = b ? viewForm(a, b) : viewList(a);
     else html = viewHome();
-    const y = window.scrollY; $('#root').innerHTML = html; window.scrollTo(0, keep ? y : 0);
+    if (keep && html === LASTHTML && $('#root .app')) { setBadge(); return; }   /* ข้อมูลไม่เปลี่ยน → ไม่วาดซ้ำ (กันจอกระพริบ/ดิ้น) */
+    LASTHTML = html; const y = window.scrollY; $('#root').innerHTML = html; if (!keep) window.scrollTo(0, 0); else if (Math.abs(window.scrollY - y) > 1) window.scrollTo(0, y);
     afterRender();
   }
-  const LCACHE = {}; let LISTEN = [];
+  let LASTHTML = ''; const LCACHE = {}; let LISTEN = [];
   function viewMap() {
     if (!GID) return viewNoGroup(); const pts = EXTRAS.pointsFrom(G(), D.group.name);
     return shell('แผนที่ลงพื้นที่', seg(SEG_S, 'map') + '<div class="card"><div class="card-title">🗺 แผนที่ดนตรีพหุวัฒนธรรมของกลุ่ม</div><div class="muted">จุดจากบันทึกที่มีพิกัด GPS (' + pts.length + ' จุด) — แตะจุดเพื่อดูรายละเอียด</div>' + EXTRAS.legendHTML(pts) + '<div id="mapEl" class="map-box"></div></div>');
@@ -544,7 +548,7 @@
     if (e.target.matches('[data-pick]') && CUR) { const files = Array.from(e.target.files || []); e.target.value = ''; for (const f of files) await addImage(f); }
   });
   document.addEventListener('click', async e => {
-    const go = e.target.closest('[data-go]'); if (go) { flushAll(); location.hash = go.dataset.go; return; }
+    const go = e.target.closest('[data-go]'); if (go) { if (go.classList.contains('back') && CUR && !CUR.single && $('[data-form]')) { leaveCheck(go.dataset.go); return; } flushAll(); location.hash = go.dataset.go; return; }
     const wa = e.target.closest('[data-act]'); if (ME && ME.teacher && (e.target.closest('[data-peer]') || (wa && WRITE_ACTS.includes(wa.dataset.act)))) { toast('มุมมองครูเป็นแบบอ่านอย่างเดียว — ลองแก้ไขได้ใน “ทดลองระบบนักเรียน”', 3500); return; }
     const ch = e.target.closest('[data-chip]'); if (ch && CUR) { const k = ch.dataset.chip, v = ch.dataset.v; const arr = (curData()[k] || []).slice(); const i = arr.indexOf(v); if (i >= 0) arr.splice(i, 1); else arr.push(v); ch.classList.toggle('on', i < 0); queueField(k, arr); return; }
     const sc = e.target.closest('[data-scale]'); if (sc && CUR) { const k = sc.dataset.scale, v = +sc.dataset.v; const nv = curData()[k] === v ? '' : v; $$('[data-scale="' + k + '"]').forEach(b => b.classList.toggle('on', +b.dataset.v === nv)); queueField(k, nv); return; }
@@ -564,7 +568,7 @@
     $('#rbtn', w).onclick = async () => {
       if (state === 'idle') {
         try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch (er) { toast('ไม่ได้รับอนุญาตใช้ไมโครโฟน'); return; }
-        const mime = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm'].find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
+        const mime = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'].find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
         mr = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 24000 } : { audioBitsPerSecond: 24000 });
         mr.ondataavailable = ev => { if (ev.data.size) chunks.push(ev.data); };
         mr.onstop = () => { clearInterval(tick); blob = new Blob(chunks, { type: mr.mimeType || 'audio/webm' }); state = 'done'; $('#rprev', w).innerHTML = '<audio controls src="' + URL.createObjectURL(blob) + '"></audio>'; const b = $('#rbtn', w); b.textContent = '✓ ใช้ไฟล์เสียงนี้'; b.className = 'btn grow'; };
@@ -604,7 +608,26 @@
     viewas: bt => { clearSubs(); D = blankD(); ME = null; teacherAsGroup(USER, bt.dataset.id).then(() => { subs.push(B.on('groups', v => { HUBG = v || {}; }, () => { })); }); },
     demoas: async () => { await B.signOut(); sessionStorage.removeItem('mcm5_viewas'); setTimeout(() => B.signIn({}), 100); },
     switchacct: async () => { sessionStorage.removeItem('mcm5_viewas'); await B.signOut(); setTimeout(() => B.signIn({}), 100); },
-    new: bt => newRecord(bt.dataset.kind),
+    new: bt => { const mine = (members().find(m => m.sid === ME.sid) || {}).roles || []; if (!mine.length) { toast('เลือกบทบาทของคุณในกลุ่มก่อน แล้วระบบจะเปิดแบบบันทึกให้ทันที', 3200); rolesModal(() => newRecord(bt.dataset.kind)); return; } newRecord(bt.dataset.kind); },
+    done: bt => leaveCheck(bt.dataset.to),
+    reload: () => location.reload(),
+    consent: bt => {
+      const e = evById(bt.dataset.id); if (!e) return; const ex = myCons(e.id);
+      CONSENT.formModal({ ev: e, stu: stuObj(), existing: ex, onSave: async rec => {
+        if (ex && ex.decision) rec.hist = Object.assign({}, ex.hist || {}, { [ex.at || Date.now()]: { decision: ex.decision, parentName: ex.parentName || '', reason: ex.reason || '', method: ex.method || 'app' } });
+        D.consents = Object.assign({}, D.consents, { [e.id]: rec }); const upd = { ['consents/' + ME.sid + '/' + e.id]: rec }; if (GID) upd['groups/' + GID + '/fieldwork/' + e.id + '/' + ME.sid] = rec.decision;
+        W(B.update('', upd)); setTimeout(() => render(true), 60);
+      } });
+    },
+    cletter: bt => {
+      const e = evById(bt.dataset.id); if (!e) return; const c = myCons(e.id); const signed = !!(c && c.decision);
+      const w = modal('<h3>🖨 หนังสือขออนุญาตผู้ปกครอง</h3><div class="muted" style="margin-bottom:10px">' + esc(e.title) + ' · ' + esc(thDate(e.date, true)) + '<br>' + (signed ? 'ผู้ปกครองลงนามในแอปแล้ว — พิมพ์ฉบับที่มีลายเซ็นเก็บเป็นหลักฐานได้' : 'พิมพ์ฉบับเปล่าให้ผู้ปกครองเซ็นบนกระดาษ แล้วส่งครู หรือให้ผู้ปกครองเซ็นในแอปก็ได้') + '</div>' +
+        (signed ? '<div class="row wrap" style="margin-bottom:8px"><button class="btn gold grow" data-k="sp">🖨 พิมพ์ฉบับที่เซ็นแล้ว</button><button class="btn grow" data-k="sd">⬇ PDF ฉบับที่เซ็นแล้ว</button></div>' : '') +
+        '<div class="row wrap"><button class="btn sec grow" data-k="bp">🖨 พิมพ์ฉบับเปล่า</button><button class="btn sec grow" data-k="bd">⬇ PDF ฉบับเปล่า</button></div><div class="muted" id="cl_msg" style="margin-top:8px"></div><button class="btn ghost block" style="margin-top:8px" data-close>ปิด</button>', { center: true });
+      w.addEventListener('click', async ev => { const b = ev.target.closest('[data-k]'); if (!b) return; const k = b.dataset.k; const it = [{ ev: e, stu: stuObj(), c: k[0] === 's' ? c : null }];
+        if (k[1] === 'p') { w.remove(); CONSENT.printLetters(it); return; }
+        b.disabled = true; try { await CONSENT.pdfLetters(it, 'ใบขออนุญาตผู้ปกครอง-' + ME.sid + '-' + e.date); w.remove(); } catch (er) { b.disabled = false; $('#cl_msg', w).textContent = 'สร้าง PDF ไม่สำเร็จ (ต้องมีอินเทอร์เน็ตครั้งแรก) — ใช้ปุ่ม “พิมพ์” แล้วเลือกบันทึกเป็น PDF แทนได้'; } });
+    },
     delrec: () => {
       if (!CUR || !confirm('ย้ายรายการนี้ไปถังขยะ? (สมาชิกกู้คืนได้)')) return; const { kind, rid, path } = CUR; const now = Date.now();
       W(B.update(path, { deleted: true, deletedAt: now, deletedBy: me(), updatedAt: now, updatedBy: me() })); log(kind, rid, 'delete', getRec(kind, rid)); CUR = null; location.hash = '#/' + kind;
@@ -632,10 +655,15 @@
     assign: bt => { const tid = bt.dataset.id; const on = assignees(tid).includes(ME.sid); W(B.set('groups/' + GID + '/assign/' + tid + '/' + ME.sid, on ? null : true)); },
     flag: bt => {
       const t = taskById(bt.dataset.id); const base = t.scope === 'individual' ? 'personal/' + ME.sid + '/flags/' : 'groups/' + GID + '/flags/';
-      const cur = t.scope === 'individual' ? (D.personal.flags || {})[t.id] : ((D.group && D.group.flags) || {})[t.id];
-      W(B.set(base + t.id, cur ? null : { by: me(), at: Date.now() })); if (!cur) toast('แจ้งครูแล้ว ✓');
+      const cur = t.scope === 'individual' ? ((D.personal || {}).flags || {})[t.id] : ((D.group && D.group.flags) || {})[t.id];
+      if (cur) { W(B.set(base + t.id, null)); return; }
+      flushAll(); const send = () => { W(B.set(base + t.id, { by: me(), at: Date.now() })); toast('แจ้งครูแล้ว ✓'); };
+      const sc = submitCheck(t); const open = sc.chk ? sc.chk.open : [];
+      if (!sc.blocks.length && !sc.warns.length && !open.length) { send(); return; }
+      gateModal({ title: sc.blocks.length ? '✋ ยังส่งงานนี้ไม่ได้' : '🔎 ตรวจก่อนส่งให้ครู', blocks: sc.blocks, warns: sc.warns, open, okLabel: 'ยืนยันและแจ้งครูให้ตรวจ', onOk: skips => { if (sc.chk && Object.keys(skips).length) writeSkips(sc.path, skips); send(); } });
     },
-    roles: () => {
+    roles: () => rolesModal(),
+    _roles_unused: () => {
       const mine = (members().find(m => m.sid === ME.sid) || {}).roles || []; const taken = {}; members().forEach(m => (m.roles || []).forEach(r => (taken[r] = taken[r] || []).push(short(m.name))));
       const w = modal('<h3>🎭 เลือกบทบาทของฉัน (1–2 บทบาท)</h3><div class="muted" style="margin-bottom:8px">กลุ่มละ ' + C.group.min + '–' + C.group.max + ' คน ทุกบทบาทควรมีผู้รับผิดชอบ</div>' +
         C.roles.map(r => '<label class="chk" style="margin-bottom:6px"><input type="checkbox" value="' + r.id + '"' + (mine.includes(r.id) ? ' checked' : '') + '><span><b>' + r.icon + ' ' + esc(r.name) + '</b><br><span class="muted">' + esc(r.duty) + '</span>' + (taken[r.id] ? '<br><span class="tag gold">' + esc(taken[r.id].join(', ')) + '</span>' : '') + '</span></label>').join('') +
@@ -655,19 +683,132 @@
     bell: () => bellModal(),
     snaprestore: async bt => { const s = (await B.snapshots('g:' + GID)).find(x => x.id === bt.dataset.id); if (s && confirm('กู้คืนรายการที่หายไปจากสำเนาวันที่ ' + thDateTime(s.at) + '?')) restoreGroupData(s.data); },
     dlsnap: async bt => { const s = (await B.snapshots('g:' + GID)).find(x => x.id === bt.dataset.id); if (s) M.saveJSON({ app: 'mcm5g-snap', v: 2, gid: GID, at: s.at, data: s.data }, 'สำเนา-' + GID + '-' + s.at + '.json'); },
-    acdocx: async bt => acRun(bt, ctx => REPORT.exportDocx(G(), ctx)),
-    acpdf: async bt => acRun(bt, ctx => REPORT.exportPdf(G(), ctx, (i, n) => { bt.textContent = 'หน้า ' + i + '/' + n + '…'; })),
+    acdocx: async bt => exportGate() && acRun(bt, ctx => REPORT.exportDocx(G(), ctx)),
+    acpdf: async bt => exportGate() && acRun(bt, ctx => REPORT.exportPdf(G(), ctx, (i, n) => { bt.textContent = 'หน้า ' + i + '/' + n + '…'; })),
     acprev: async bt => acRun(bt, async ctx => REPORT.preview(G(), ctx)),
     preview: async () => M.previewPages(M.buildPages(G(), await reportCtx())),
-    pdf: bt => exportWith(bt, (root, prog) => M.exportPDF(root, fileBase() + '.pdf', prog)),
-    png: bt => exportWith(bt, (root, prog) => M.exportPNGs(root, fileBase(), prog)),
-    print: async () => M.printPages(M.buildPages(G(), await reportCtx())),
+    pdf: bt => exportGate() && exportWith(bt, (root, prog) => M.exportPDF(root, fileBase() + '.pdf', prog)),
+    png: bt => exportGate() && exportWith(bt, (root, prog) => M.exportPNGs(root, fileBase(), prog)),
+    print: async () => exportGate() && M.printPages(M.buildPages(G(), await reportCtx())),
     poster: async bt => {
       const R = (D.docs && D.docs.report) || {}; const n0 = M.listOf(G(), 'notes')[0]; const cid = R.posterCommunity || (n0 ? (M.commObj(n0) || {}).id : '') || C.communities[0].id; const old = bt.textContent; bt.disabled = true; bt.textContent = 'กำลังสร้าง…';
       try { await M.exportPoster(M.buildPoster(G(), await reportCtx(), cid), 'โปสเตอร์-' + (M.commById(cid) || {}).name + '-' + D.group.name + '.png'); } catch (er) { toast('สร้างโปสเตอร์ไม่สำเร็จ (ต้องมีอินเทอร์เน็ตครั้งแรก)', 4000); }
       bt.disabled = false; bt.textContent = old;
     }
   };
+
+  /* ---------- ใบอนุญาตผู้ปกครอง ---------- */
+  const evById = id => D.calendar && D.calendar[id] ? Object.assign({ id }, D.calendar[id]) : null;
+  const myCons = eid => (D.consents || {})[eid] || null;
+  const stuObj = () => ({ sid: ME.sid, name: ME.name, room: ME.room, no: ME.no, gid: GID, group: (D.group || {}).name || '' });
+  function consentBar(e) {
+    if (!ME || !CONSENT.needsConsent(e)) return '';
+    const fw = (D.group && D.group.fieldwork && D.group.fieldwork[e.id]) || {};
+    const row = GID ? '<div class="fw-row" style="width:100%">' + members().map(m => { const d = fw[m.sid]; return '<span class="' + (d === 'allow' ? 'a' : d === 'deny' ? 'd' : 'p') + '">' + (d === 'allow' ? '✅' : d === 'deny' ? '❌' : '⏳') + ' ' + esc(short(m.name)) + '</span>'; }).join('') + '</div>' : '';
+    if (ME.teacher) return row;
+    const c = myCons(e.id), has = !!(c && c.decision);
+    return '<button class="btn xs ' + (has ? 'sec' : 'gold') + '" data-act="consent" data-id="' + esc(e.id) + '">' + (has ? '✍️ แก้ไขการตัดสินใจของผู้ปกครอง' : '✍️ ให้ผู้ปกครองเซ็นอนุญาต') + '</button><button class="btn xs sec" data-act="cletter" data-id="' + esc(e.id) + '">🖨 ใบขออนุญาต</button>' +
+      '<div style="width:100%">' + CONSENT.chip(c) + (has ? ' <span class="muted" style="font-size:.76rem">' + esc(c.parentName || '') + ' · ' + esc(thDateTime(c.at)) + (c.method === 'paper' ? ' · ครูบันทึกจากใบกระดาษ' : '') + '</span>' : '') +
+      (has && c.decision === 'deny' ? '<div class="skipnote" style="margin-top:4px">ระบบบันทึกว่าคุณ <b>ไม่ได้ร่วมลงพื้นที่ครั้งนี้เพราะผู้ปกครองไม่อนุญาต</b>' + (c.reason ? ' (' + esc(c.reason) + ')' : '') + ' — คะแนนงานภาคสนามจะคิดตามสัดส่วน ช่วยกลุ่มในงานวิเคราะห์ สรุป และรายงานได้เต็มที่ และทำงานทดแทนตามที่ครูมอบหมาย</div>' : '') + '</div>' + row;
+  }
+
+  /* ---------- การมีส่วนร่วม (นับจากประวัติการบันทึกจริง) ---------- */
+  const CONTRIB_ACTS = ['create', 'edit', 'media'];
+  function contribMap() { const o = {}; Object.values(D.history || {}).forEach(h => { const s = h.by && h.by.sid; if (s && CONTRIB_ACTS.includes(h.act) && FORMS[h.kind]) (o[s] = o[s] || new Set()).add(h.kind); }); return o; }
+  function goalsCard(mem, mine) {
+    if (ME.teacher) return '';
+    const cm = contribMap(), myK = cm[ME.sid] || new Set();
+    const up = myEvents().filter(e => e.date >= today() && CONSENT.needsConsent(e)), pend = up.filter(e => !(myCons(e.id) && myCons(e.id).decision));
+    const rfOk = M.checkRecord('reflection', (D.personal || {}).reflection).valid, claimed = C.tasks.some(t => t.scope === 'group' && assignees(t.id).includes(ME.sid));
+    const dots = '<span class="dots">' + C.tasks.filter(t => t.scope === 'group').map(t => '<i class="' + (myK.has(t.kind) ? 'on' : '') + '" title="' + esc(t.name) + '">' + t.icon + '</i>').join('') + '</span>';
+    const it = [[mine.roles.length > 0, 'เลือกบทบาทของฉันในกลุ่ม', '<button class="btn xs gold" data-act="roles">เลือก</button>'],
+      [claimed, 'รับผิดชอบงานอย่างน้อย 1 ชิ้น (กด “＋ รับงานนี้” ในหน้างาน)', '<a class="btn xs sec" href="#/notes">ไปที่งาน</a>'],
+      [myK.size > 0, 'มีชื่อในงานกลุ่ม: เพิ่ม แก้ไข หรือแนบภาพ/เสียงอย่างน้อย 1 ครั้ง<br>' + dots, '']];
+    if (up.length) it.push([!pend.length, 'ผู้ปกครองรับทราบการลงพื้นที่ (อนุญาตหรือไม่อนุญาตก็ได้)', '<a class="btn xs gold" href="#/calendar">ไปเซ็น</a>']);
+    it.push([rfOk, 'เขียนสะท้อนคิดของฉัน', '<a class="btn xs sec" href="#/reflection">เขียน</a>']);
+    const n = it.filter(x => x[0]).length; const idle = mem.filter(m => !cm[m.sid]);
+    return '<div class="card"><div class="card-title">🎯 ภารกิจของฉัน <span class="muted">' + n + '/' + it.length + '</span></div><div class="bar" style="margin-bottom:8px"><i style="width:' + Math.round(n / it.length * 100) + '%"></i></div><ul class="goal">' +
+      it.map(x => '<li class="' + (x[0] ? 'ok' : '') + '"><span class="ck">' + (x[0] ? '✓' : '•') + '</span><div class="grow">' + x[1] + '</div>' + (x[0] ? '' : x[2]) + '</li>').join('') + '</ul>' +
+      (idle.length ? '<div class="tip" style="margin:10px 0 0">เพื่อนที่ยังไม่มีชื่อในงานกลุ่ม: <b>' + idle.map(m => esc(short(m.name))).join(', ') + '</b> — กลุ่มจะแจ้งส่งรายงานได้เมื่อทุกคนมีส่วนร่วมอย่างน้อยคนละ 1 ครั้ง</div>' : '<div class="hint" style="margin-top:8px">ทุกคนในกลุ่มมีส่วนร่วมแล้ว 👏</div>') + '</div>';
+  }
+  function rolesModal(after) {
+    const mine = (members().find(m => m.sid === ME.sid) || {}).roles || []; const taken = {}; members().forEach(m => (m.roles || []).forEach(r => (taken[r] = taken[r] || []).push(short(m.name))));
+    const w = modal('<h3>🎭 เลือกบทบาทของฉัน (1–2 บทบาท)</h3><div class="muted" style="margin-bottom:8px">กลุ่มละ ' + C.group.min + '–' + C.group.max + ' คน ทุกบทบาทควรมีผู้รับผิดชอบ</div>' +
+      C.roles.map(r => '<label class="chk" style="margin-bottom:6px"><input type="checkbox" value="' + r.id + '"' + (mine.includes(r.id) ? ' checked' : '') + '><span><b>' + r.icon + ' ' + esc(r.name) + '</b><br><span class="muted">' + esc(r.duty) + '</span>' + (taken[r.id] ? '<br><span class="tag gold">' + esc(taken[r.id].join(', ')) + '</span>' : '') + '</span></label>').join('') +
+      '<button class="btn block" id="rsave">บันทึกบทบาท</button>');
+    $('#rsave', w).onclick = () => { const sel = $$('input:checked', w).map(i => i.value); if (sel.length > 2) { toast('เลือกได้ไม่เกิน 2 บทบาท'); return; } if (after && !sel.length) { toast('เลือกอย่างน้อย 1 บทบาท'); return; } if (D.group) { D.group.roles = D.group.roles || {}; D.group.roles[ME.sid] = sel; } W(B.set('groups/' + GID + '/roles/' + ME.sid, sel.length ? sel : null)); w.remove(); toast('บันทึกบทบาทแล้ว'); if (after) after(); };
+  }
+
+  /* ---------- ตรวจความครบถ้วนก่อนออกจากแบบบันทึก / ก่อนแจ้งส่งงาน ---------- */
+  function domRec(base) {
+    const r = Object.assign({}, base); const P = (CUR && PEND[CUR.path] && PEND[CUR.path].f) || {}; Object.assign(r, P);
+    $$('[data-form] [data-f]').forEach(el => { r[el.dataset.f] = el.type === 'checkbox' ? el.checked : el.value; });
+    const ch = {}; $$('[data-form] [data-chip]').forEach(b => { ch[b.dataset.chip] = ch[b.dataset.chip] || []; if (b.classList.contains('on')) ch[b.dataset.chip].push(b.dataset.v); }); Object.assign(r, ch);
+    const sc = {}; $$('[data-form] [data-scale]').forEach(b => { if (!(b.dataset.scale in sc)) sc[b.dataset.scale] = ''; if (b.classList.contains('on')) sc[b.dataset.scale] = +b.dataset.v; }); Object.assign(r, sc);
+    if ($('#gpsOut a') && !(r.gps && r.gps.lat != null)) r.gps = { lat: 0, lng: 0 };
+    if ($('#signCv')) r.sign = signDrawn || '';
+    if ($('#mediaBox [data-mid]') && !M.mediaIds(r).length) r.media = { _dom: { at: 1 } };
+    return r;
+  }
+  function writeSkips(path, skips, stale) {
+    const upd = {}; Object.keys(skips).forEach(k => upd['_skip/' + k] = { label: skips[k].label, why: skips[k].why || '', by: me(), at: Date.now() }); (stale || []).forEach(k => upd['_skip/' + k] = null);
+    if (Object.keys(upd).length) W(B.update(path, upd));
+  }
+  function gateModal(o) {
+    const WHY = M.SKIP_WHY; const blocks = o.blocks || [], warns = o.warns || [], open = o.open || [];
+    const w = modal('<h3>' + esc(o.title) + '</h3>' +
+      (blocks.length ? '<div class="muted" style="margin-bottom:6px">🔴 ต้องทำก่อน' + (o.draftLabel ? 'จึงจะนับเป็นชิ้นงาน' : '') + '</div><ul class="chk-list">' + blocks.map(b => '<li class="blk"><span>✋</span><div class="grow">' + esc(b) + '</div></li>').join('') + '</ul>' : '') +
+      (warns.length ? '<ul class="chk-list">' + warns.map(b => '<li class="wrn"><span>⚠️</span><div class="grow">' + esc(b) + '</div></li>').join('') + '</ul>' : '') +
+      (open.length ? '<div class="muted" style="margin-bottom:6px">🟡 รายละเอียดสำคัญที่ยังไม่มี — กลับไปกรอก หรือ <b>ติ๊กยืนยันทีละข้อ</b> ว่ายังไม่มีข้อมูลส่วนนี้ (ครูจะเห็นการยืนยันและเหตุผล)</div><ul class="chk-list">' + open.map(x => '<li class="wrn"><input type="checkbox" data-skip="' + esc(x.k) + '" id="sk_' + esc(x.k) + '"><div class="grow"><label for="sk_' + esc(x.k) + '"><b>' + esc(x.label) + '</b><br><span class="muted">ยืนยันว่ายังไม่มีข้อมูลส่วนนี้</span></label><select data-why="' + esc(x.k) + '">' + (WHY[x.k] || WHY._).map(y => '<option>' + esc(y) + '</option>').join('') + '</select></div></li>').join('') + '</ul>' : '') +
+      '<button class="btn gold block" data-close>✏️ กลับไปกรอกต่อ</button>' +
+      (blocks.length ? (o.draftLabel ? '<button class="btn sec block" style="margin-top:8px" id="gm_draft">' + esc(o.draftLabel) + '</button>' : '') : '<button class="btn block" style="margin-top:8px" id="gm_ok"' + (open.length ? ' disabled' : '') + '>' + esc(o.okLabel || 'ยืนยัน') + '</button>'), { center: true });
+    const ok = $('#gm_ok', w), dr = $('#gm_draft', w);
+    w.addEventListener('change', () => { if (ok) ok.disabled = $$('[data-skip]', w).some(c => !c.checked); });
+    if (ok) ok.onclick = () => { const skips = {}; open.forEach(x => { skips[x.k] = { label: x.label, why: ($('[data-why="' + x.k + '"]', w) || {}).value || '' }; }); w.remove(); o.onOk(skips); };
+    if (dr) dr.onclick = () => { w.remove(); o.onDraft(); };
+    return w;
+  }
+  function leaveCheck(target) {
+    if (!CUR || CUR.single || (ME && ME.teacher) || !$('[data-form]')) { flushAll(); location.hash = target; return; }
+    const kind = CUR.kind, path = CUR.path; const rec = domRec(getRec(kind, CUR.rid) || {}); const chk = M.checkRecord(kind, rec);
+    const stale = Object.keys(rec._skip || {}).filter(k => rec._skip[k] && !chk.key.some(x => x.k === k));
+    flushAll(); const go = () => { location.hash = target; };
+    if (chk.valid && !chk.open.length) { if (stale.length) writeSkips(path, {}, stale); go(); return; }
+    gateModal({ title: chk.valid ? '🔎 ข้อมูลยังไม่ครบบางส่วน' : '✋ ข้อมูลขั้นต่ำยังไม่ครบ', blocks: chk.req.map(x => 'ยังไม่ได้กรอก “' + x.label + '”'), open: chk.valid ? chk.open : [], okLabel: 'ยืนยันและกลับไปรายการ', draftLabel: 'ออกโดยเก็บเป็น “ร่าง” (ยังไม่นับเป็นชิ้นงาน)',
+      onOk: skips => { writeSkips(path, skips, stale); go(); }, onDraft: go });
+  }
+  function submitCheck(t) {
+    const blocks = [], warns = [], mem = members(), kind = t.kind, nm = l => l.map(m => short(m.name)).join(', '); let chk = null, path = null;
+    if (t.scope === 'individual') {
+      path = 'personal/' + ME.sid + '/reflection'; chk = M.checkRecord('reflection', $('[data-form]') && CUR && CUR.kind === 'reflection' ? domRec((D.personal || {}).reflection || {}) : (D.personal || {}).reflection);
+      chk.req.forEach(x => blocks.push('ยังไม่ได้กรอก “' + x.label + '”'));
+      if (GID) { const pr = (D.personal || {}).peer || {}; const miss = mem.filter(m => m.sid !== ME.sid && !(pr[m.sid] && pr[m.sid].score)); if (miss.length) blocks.push('ยังไม่ได้ประเมินการมีส่วนร่วมของเพื่อน: ' + nm(miss));
+        if (!contribMap()[ME.sid]) blocks.push('คุณยังไม่มีชื่อในงานของกลุ่มเลย — เพิ่ม แก้ไข หรือแนบภาพ/เสียงในงานกลุ่มอย่างน้อย 1 ครั้งก่อนส่งสะท้อนคิด'); }
+      return { blocks, warns, chk, path };
+    }
+    if (M.LIST_KINDS.includes(kind)) {
+      const p = M.taskProgress(t, G()); const list = M.listOf(G(), kind);
+      if (p.n < 1) blocks.push('ยังไม่มีรายการที่กรอกข้อมูลขั้นต่ำครบ (ช่องที่มี *) แม้แต่รายการเดียว'); else if (p.n < p.min) warns.push('ทำได้ ' + p.n + ' รายการ จากขั้นต่ำ ' + p.min + ' รายการ — ส่งได้ แต่คะแนนด้านความครบถ้วนอาจลดลง');
+      if (p.drafts) warns.push('มี ' + p.drafts + ' รายการที่ยังเป็น “ร่าง” (ไม่นับเป็นชิ้นงาน)');
+      const nOpen = list.reduce((a, r) => { const k = M.checkRecord(kind, r); return a + (k.valid ? k.open.length : 0); }, 0);
+      if (nOpen) warns.push('ยังมีรายละเอียดสำคัญที่ไม่ได้กรอกและยังไม่ได้ยืนยัน ' + nOpen + ' จุด (เปิดรายการที่มีป้าย ⚠ แล้วกด “เสร็จ” เพื่อกรอกหรือยืนยัน)');
+    } else {
+      path = 'docs/' + GID + '/' + kind; chk = M.checkRecord(kind, $('[data-form]') && CUR && CUR.kind === kind ? domRec((D.docs || {})[kind] || {}) : (D.docs || {})[kind]);
+      chk.req.forEach(x => blocks.push('ยังไม่ได้กรอก “' + x.label + '”'));
+    }
+    const need = Math.min(2, mem.length), cs = new Set(); Object.values(D.history || {}).forEach(h => { if (h.kind === kind && h.by && CONTRIB_ACTS.includes(h.act) && mem.some(m => m.sid === h.by.sid)) cs.add(h.by.sid); });
+    if (cs.size < need) blocks.push('งานกลุ่มต้องมีสมาชิกร่วมบันทึกหรือแก้ไขอย่างน้อย ' + need + ' คน (ตอนนี้ ' + cs.size + ' คน) — ชวนเพื่อนเปิดงานนี้แล้วเพิ่มหรือปรับสักหนึ่งจุด');
+    if (t.id === 't6') {
+      C.tasks.filter(x => x.scope === 'group' && x.id !== 't6').forEach(x => { if (!(M.taskProgress(x, G()).n > 0)) blocks.push('งาน “' + x.name + '” ยังไม่มีข้อมูลขั้นต่ำ — ทุกชิ้นงานต้องมีข้อมูลอย่างน้อยเล็กน้อย'); });
+      const cm = contribMap(), idle = mem.filter(m => !cm[m.sid]); if (idle.length) blocks.push('สมาชิกที่ยังไม่มีชื่อในงานใดเลย: ' + nm(idle) + ' — ทุกคนต้องมีส่วนร่วมอย่างน้อย 1 ครั้งก่อนส่งรายงาน');
+    }
+    return { blocks, warns, chk, path };
+  }
+  function exportGate() {
+    if (!ME || ME.teacher) return true;
+    const miss = C.tasks.filter(x => x.scope === 'group' && x.id !== 't6').filter(x => !(M.taskProgress(x, G()).n > 0)); if (!miss.length) return true;
+    gateModal({ title: '✋ ยังส่งออกรายงานฉบับจริงไม่ได้', blocks: miss.map(x => x.icon + ' ' + x.name + ' — ยังไม่มีข้อมูลขั้นต่ำ (ทุกชิ้นงานต้องมีข้อมูลอย่างน้อยเล็กน้อย)'), warns: ['ระหว่างนี้ใช้ “👁 ดูตัวอย่าง” เพื่อดูหน้าตารายงานได้'] }); return false;
+  }
 
   /* ---------- กู้คืนข้อมูลกลุ่ม (เพิ่มเฉพาะที่หาย/ใหม่กว่า) ---------- */
   async function restoreGroupData(data, media) {

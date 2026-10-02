@@ -98,7 +98,14 @@
   const DemoImpl = {
     name: 'demo', ls: [], authCb: null,
     tree() { try { return JSON.parse(localStorage.getItem(DKEY)) || {}; } catch (e) { return {}; } },
-    save(t) { localStorage.setItem(DKEY, JSON.stringify(t)); this.emit(t); },
+    save(t) {
+      try { localStorage.setItem(DKEY, JSON.stringify(t)); }
+      catch (e) { /* พื้นที่โหมดสาธิตเต็ม (~5MB) → ตัดสำเนาประวัติเก่าออกแล้วลองใหม่ ข้อมูลหลักไม่หาย */
+        try { Object.values(t.history || {}).forEach(g => { const ks = Object.keys(g || {}).sort((a, b) => (g[a].at || 0) - (g[b].at || 0)); ks.slice(0, Math.max(0, ks.length - 40)).forEach(k => delete g[k]); ks.forEach(k => { if (g[k]) g[k].snap = null; }); }); localStorage.setItem(DKEY, JSON.stringify(t)); }
+        catch (e2) { console.warn('demo storage full', e2); if (window.MC) window.MC.toast('พื้นที่โหมดทดลองเต็ม — ไปที่แผงครู → ตั้งค่า → ล้างข้อมูลสาธิต', 5000); }
+      }
+      this.emit(t);
+    },
     async init() {
       if (!localStorage.getItem(DKEY)) this.save(seedDemo());
       window.addEventListener('storage', e => { if (e.key === DKEY) this.emit(); });
@@ -247,7 +254,7 @@
         'auth/unauthorized-domain': 'โดเมน ' + host + ' ยังไม่ได้รับอนุญาต → Firebase › Authentication › Settings › Authorized domains › เพิ่ม ' + host,
         'auth/operation-not-allowed': 'ยังไม่ได้เปิดการล็อกอินด้วย Google → Firebase › Authentication › Sign-in method › Google › Enable',
         'auth/popup-blocked': 'เบราว์เซอร์บล็อกหน้าต่างล็อกอิน → อนุญาต pop-up สำหรับเว็บนี้ แล้วกดใหม่',
-        'auth/popup-closed-by-user': 'ปิดหน้าต่างล็อกอินก่อนเสร็จ — กดเข้าสู่ระบบใหม่อีกครั้ง',
+        'auth/popup-closed-by-user': 'หน้าต่างล็อกอินถูกปิดก่อนเสร็จ — ถ้าหน้าต่าง Google ขึ้นว่า “Access blocked / ถูกบล็อก / ผู้ดูแลระบบจำกัดการเข้าถึง” แปลว่าผู้ดูแลอีเมลโรงเรียน (@sappha.ac.th) ต้องอนุญาตแอปนี้ก่อน ให้แจ้งครู; ถ้าไม่ใช่ ให้กดเข้าสู่ระบบใหม่',
         'auth/cancelled-popup-request': 'มีหน้าต่างล็อกอินเปิดอยู่แล้ว — ปิดแล้วกดใหม่',
         'auth/network-request-failed': 'เชื่อมต่ออินเทอร์เน็ตไม่ได้ — ตรวจสัญญาณแล้วลองใหม่',
         'auth/web-storage-unsupported': 'เบราว์เซอร์นี้ปิดการเก็บข้อมูล (โหมดส่วนตัว/บล็อกคุกกี้) — เปิดด้วย Safari/Chrome ปกติ',

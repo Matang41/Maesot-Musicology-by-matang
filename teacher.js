@@ -12,7 +12,7 @@
 
   let loginMsg = '';
   let USER = null, STATUS = { online: true, pending: 0, failed: 0 };
-  const D = { roster: {}, groups: {}, memberOf: {}, calendar: {}, grades: { groups: {}, students: {} }, config: {}, records: null, personal: {}, gdata: {} };
+  const D = { consents: {}, roster: {}, groups: {}, memberOf: {}, calendar: {}, grades: { groups: {}, students: {} }, config: {}, records: null, personal: {}, gdata: {} };
   const V = { tab: 'dash', room: '5/1', sel: new Set(), gid: null, tid: 't1', sid: null, cal: { y: new Date().getFullYear(), m: new Date().getMonth(), sel: today() } };
   let subs = [], gsubs = [];
   const MEDIA = {}; const TRIED = new Set();
@@ -26,27 +26,39 @@
   const tMe = () => ({ sid: 'teacher', name: (USER && USER.name) || 'ครู' });
 
   /* ---------- คะแนน ---------- */
+  /* นัดลงพื้นที่ของนักเรียนแต่ละคน + สัดส่วนที่ผู้ปกครองไม่อนุญาต → ตัวคูณคะแนนงานภาคสนาม */
+  const FIELD = C.fieldTasks || ['t1', 't2'];
+  function eventsFor(sid) { const gid = D.memberOf[sid], room = (D.roster[sid] || {}).room; return Object.keys(D.calendar || {}).map(id => Object.assign({ id }, D.calendar[id])).filter(e => { if (!e.date) return false; const gs = e.groups ? Object.keys(e.groups) : []; return gs.length ? !!(gid && gs.includes(gid)) : (!e.room || e.room === room); }); }
+  function fwOf(sid) { const p = CONSENT.participation(eventsFor(sid), (D.consents || {})[sid]); const ex = !!((D.grades.students || {})[sid] || {}).noPenalty; p.exempt = ex; p.pct = (ex || !p.total) ? 0 : round1((C.consentPenalty || 0) * p.deny / p.total); return p; }
+  function evStudents(e) { const gs = e.groups ? Object.keys(e.groups).filter(g => D.groups[g]) : []; const gl = gs.length ? gs : groupsOf(e.room).map(g => g.gid); const out = []; gl.forEach(gid => memList(D.groups[gid]).forEach(m => { const r = D.roster[m.sid] || {}; out.push({ sid: m.sid, name: m.name, no: r.no || m.no, room: r.room || D.groups[gid].room, gid, group: D.groups[gid].name }); })); return out; }
   function finalOf(sid) {
-    const sg = (D.grades.students || {})[sid] || {}, gid = D.memberOf[sid], gg = ((D.grades.groups || {})[gid] || {}).tasks || {}; const out = {}; let tot = 0, any = false;
+    const sg = (D.grades.students || {})[sid] || {}, gid = D.memberOf[sid], gg = ((D.grades.groups || {})[gid] || {}).tasks || {}; const out = {}; let tot = 0, any = false; const fw = fwOf(sid);
     C.tasks.forEach(t => {
       let s = null;
       if (t.scope === 'individual') { const e = sg.tasks && sg.tasks[t.id]; s = e && e.s != null && e.s !== '' ? +e.s : null; }
-      else { const e = gg[t.id]; if (e && e.s != null && e.s !== '') s = Math.max(0, Math.min(maxOf(t), round1(+e.s + (+((sg.adj || {})[t.id]) || 0)))); }
+      else { const e = gg[t.id]; if (e && e.s != null && e.s !== '') { s = Math.max(0, Math.min(maxOf(t), round1(+e.s + (+((sg.adj || {})[t.id]) || 0)))); if (fw.pct && FIELD.includes(t.id)) s = round1(s * (1 - fw.pct / 100)); } }
       out[t.id] = s; if (s != null) { tot += s; any = true; }
     });
-    return { tasks: out, total: any ? round1(tot) : null };
+    return { tasks: out, total: any ? round1(tot) : null, fw };
   }
   function pushFinal(sids) {
-    const upd = {}; sids.forEach(sid => { const f = finalOf(sid); const fin = {}; Object.keys(f.tasks).forEach(k => { if (f.tasks[k] != null) fin[k] = f.tasks[k]; }); upd['grades/students/' + sid + '/final'] = Object.keys(fin).length ? fin : null; upd['grades/students/' + sid + '/total'] = f.total; upd['grades/students/' + sid + '/room'] = (D.roster[sid] || {}).room || ''; upd['grades/students/' + sid + '/gid'] = D.memberOf[sid] || null; });
+    const upd = {}; sids.forEach(sid => { const f = finalOf(sid); const fin = {}; Object.keys(f.tasks).forEach(k => { if (f.tasks[k] != null) fin[k] = f.tasks[k]; }); upd['grades/students/' + sid + '/final'] = Object.keys(fin).length ? fin : null; upd['grades/students/' + sid + '/total'] = f.total; upd['grades/students/' + sid + '/room'] = (D.roster[sid] || {}).room || ''; upd['grades/students/' + sid + '/gid'] = D.memberOf[sid] || null; upd['grades/students/' + sid + '/fw'] = f.fw.total ? { deny: f.fw.deny, total: f.fw.total, pct: f.fw.pct, exempt: f.fw.exempt } : null; });
     if (Object.keys(upd).length) W(B.update('', upd));
   }
+  /* เมื่อใบอนุญาต/ปฏิทิน/ค่าหักเปลี่ยน → คำนวณคะแนนที่เผยแพร่ไว้ใหม่ให้ตรงเสมอ */
+  const LD = {}; let syncT = null;
+  function queueSync() { clearTimeout(syncT); syncT = setTimeout(() => {
+    if (!USER || !['roster', 'groups', 'memberOf', 'calendar', 'grades', 'consents', 'config'].every(k => LD[k])) return;
+    const diff = Object.keys(D.grades.students || {}).filter(sid => { const sg = D.grades.students[sid] || {}; if (!sg.final) return false; const f = finalOf(sid); return Object.keys(f.tasks).some(k => f.tasks[k] != null && sg.final[k] !== f.tasks[k]); });
+    if (diff.length) pushFinal(diff);
+  }, 1500); }
   function rubricScore(t, r) { if (!t.criteria.every(c => r && r[c.k])) return null; return round1(maxOf(t) * t.criteria.reduce((a, c) => a + r[c.k], 0) / (4 * t.criteria.length)); }
 
   /* ---------- subscriptions ---------- */
-  function sub(path, fn) { subs.push(B.on(path, v => { fn(v); schedule(); }, e => toast('อ่านข้อมูลไม่ได้ (' + path + '): ' + (e.code || e.message), 4000))); }
+  function sub(path, fn) { subs.push(B.on(path, v => { fn(v); LD[path] = 1; schedule(); if (['consents', 'calendar', 'config', 'memberOf'].includes(path)) queueSync(); }, e => toast('อ่านข้อมูลไม่ได้ (' + path + '): ' + (e.code || e.message), 4000))); }
   function startData() {
     sub('roster', v => D.roster = v || {}); sub('groups', v => D.groups = v || {}); sub('memberOf', v => D.memberOf = v || {});
-    sub('calendar', v => D.calendar = v || {}); needRecords(); sub('grades', v => D.grades = Object.assign({ groups: {}, students: {} }, v || {})); sub('config', v => { D.config = v || {}; M.applyInfo(D.config); }); sub('tcomments', v => D.tc = v || {});
+    sub('calendar', v => D.calendar = v || {}); needRecords(); sub('grades', v => D.grades = Object.assign({ groups: {}, students: {} }, v || {})); sub('config', v => { D.config = v || {}; M.applyInfo(D.config); }); sub('tcomments', v => D.tc = v || {}); sub('consents', v => D.consents = v || {});
   }
   function needRecords() { if (D.records !== null) return; D.records = {}; sub('records', v => D.records = v || {}); }
   function openGroup(gid) {
@@ -55,7 +67,10 @@
     ['records', 'docs', 'history'].forEach(k => gsubs.push(B.on(k + '/' + gid, v => { D.gdata[gid][k] = v || {}; schedule(); })));
     memList(D.groups[gid]).forEach(m => gsubs.push(B.on('personal/' + m.sid, v => { D.personal[m.sid] = v || {}; schedule(); })));
   }
-  let rT = null, DRAGGING = false; function schedule() { if (DRAGGING || V.tab === 'listen' || V.tab === 'map') return; cancelAnimationFrame(rT); rT = requestAnimationFrame(() => render(true)); }
+  let rT = null, DRAGGING = false; let PENDR = false; function typing() { const a = document.activeElement; return !!(a && a.closest && a.closest('#root') && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.type !== 'checkbox' && a.type !== 'file'); }
+  /* ครูกำลังพิมพ์/เลือกอยู่ → เลื่อนการวาดหน้าจอไปจนพิมพ์เสร็จ (กันค่าที่พิมพ์หายเมื่อนักเรียนบันทึกเข้ามาพร้อมกัน) */
+  document.addEventListener('focusout', () => { if (PENDR) setTimeout(() => { if (PENDR && !typing()) { PENDR = false; schedule(); } }, 120); });
+  function schedule() { if (DRAGGING || V.tab === 'listen' || V.tab === 'map') return; if (typing()) { PENDR = true; return; } cancelAnimationFrame(rT); rT = requestAnimationFrame(() => render(true)); }
 
   /* ---------- shell ---------- */
   const TABS = [['dash', '📋 ภาพรวม'], ['roster', '🧾 จัดการรายชื่อ'], ['groups', '👥 จัดกลุ่ม'], ['cal', '🗓 ปฏิทิน'], ['grade', '✅ ตรวจงาน'], ['map', '🗺 แผนที่'], ['listen', '🎧 ห้องฟัง'], ['scores', '📤 คะแนน/ส่งออก'], ['backup', '⚙ ตั้งค่า/สำรอง']];
@@ -211,7 +226,7 @@
   }
 
   /* ---------- ปฏิทิน ---------- */
-  const evActions = e => (e.status === 'proposed' ? '<button class="btn xs gold" data-act="evapprove" data-id="' + esc(e.id) + '">✓ อนุมัติ</button>' : '') + '<button class="btn xs sec" data-act="evedit" data-id="' + esc(e.id) + '">✎ แก้ไข</button><button class="btn xs sec" data-act="evics" data-id="' + esc(e.id) + '">📲 .ics</button>';
+  const evActions = e => (e.status === 'proposed' ? '<button class="btn xs gold" data-act="evapprove" data-id="' + esc(e.id) + '">✓ อนุมัติ</button>' : '') + '<button class="btn xs sec" data-act="evedit" data-id="' + esc(e.id) + '">✎ แก้ไข</button><button class="btn xs sec" data-act="evics" data-id="' + esc(e.id) + '">📲 .ics</button>' + (CONSENT.needsConsent(e) ? (() => { const st = evStudents(e); let a = 0, d = 0; st.forEach(s => { const c = ((D.consents || {})[s.sid] || {})[e.id]; if (c && c.decision === 'allow') a++; else if (c && c.decision === 'deny') d++; }); return '<button class="btn xs gold" data-act="evconsent" data-id="' + esc(e.id) + '">📝 ใบอนุญาตผู้ปกครอง ✅' + a + ' ❌' + d + ' ⏳' + (st.length - a - d) + '</button>'; })() : '');
   function viewCal() {
     const evs = Object.keys(D.calendar).map(id => Object.assign({ id }, D.calendar[id])).sort((a, b) => (a.date + (a.start || '')).localeCompare(b.date + (b.start || '')));
     const day = evs.filter(e => e.date === V.cal.sel), up = evs.filter(e => e.date >= today() && e.status !== 'cancelled');
@@ -251,6 +266,7 @@
     Object.keys(D.calendar || {}).forEach(id => { const e = D.calendar[id]; if (e.status === 'proposed') out.push({ ic: '🗓', t: 'คำขอลงพื้นที่: ' + e.title + ' (' + thDate(e.date) + ')', tab: 'cal', at: e.createdAt }); });
     Object.keys(D.groups || {}).forEach(gid => { const g = D.groups[gid]; const gg = ((D.grades.groups || {})[gid] || {}).tasks || {};
       Object.keys(g.flags || {}).forEach(tid => { const f = g.flags[tid]; if (f && !(gg[tid] && gg[tid].s != null) && taskById(tid)) out.push({ ic: '✋', t: g.name + ' (ม.' + g.room + ') แจ้งว่า “' + taskById(tid).name + '” เสร็จแล้ว — รอตรวจ', gid, tid, at: f.at }); }); });
+    Object.keys(D.consents || {}).forEach(sid => Object.keys(D.consents[sid] || {}).forEach(eid => { const c = D.consents[sid][eid], e = D.calendar[eid]; if (c && e && c.decision === 'deny' && (c.at || 0) > seen && c.method !== 'paper') out.push({ ic: '🚫', t: ((D.roster[sid] || {}).name || sid) + ' — ผู้ปกครองไม่อนุญาตลงพื้นที่ “' + e.title + '”' + (c.reason ? ' (' + c.reason + ')' : ''), tab: 'cal', at: c.at }); }));
     if (D.records) Object.keys(D.records).forEach(gid => { let n = 0, last = 0; Object.values(D.records[gid] || {}).forEach(k => Object.values(k || {}).forEach(r => { if ((r.updatedAt || 0) > seen) { n++; last = Math.max(last, r.updatedAt); } })); if (n && D.groups[gid]) out.push({ ic: '📝', t: D.groups[gid].name + ' (ม.' + D.groups[gid].room + ') บันทึก/แก้ไขใหม่ ' + n + ' รายการ', gid, at: last }); });
     return out.sort((a, b) => (b.at || 0) - (a.at || 0));
   }
@@ -287,7 +303,7 @@
       const p = M.taskProgress(t, gd, null); const fl = g.flags && g.flags[t.id]; const media = mediaFor(g.gid); const isOpen = V.open && V.open.has(g.gid);
       let body = '';
       if (isOpen) {
-        if (F.single) { const doc = gd.docs[kind] || {}; body = M.filled(doc) ? M.renderRecord(kind, doc, media, { showBy: true }) + tcBox(g.gid, kind, kind) : '<div class="muted">ยังไม่มีข้อมูล</div>'; }
+        if (F.single) { const doc = gd.docs[kind] || {}; body = M.filled(doc) ? M.skipHTML(doc) + M.renderRecord(kind, doc, media, { showBy: true }) + tcBox(g.gid, kind, kind) : '<div class="muted">ยังไม่มีข้อมูล</div>'; }
         else { const list = M.listOf(gd, kind); body = list.length ? list.map((r, i) => { const s = F.summary(r); return '<div class="sub-rec"><div class="rec-t">' + (i + 1) + '. ' + esc(s.t) + '</div><div class="rec-s">' + esc(s.s) + '</div>' + M.metaHTML(r) + M.renderRecord(kind, r, media, {}) + tcBox(g.gid, r.id, kind) + '</div>'; }).join('') : '<div class="muted">ยังไม่มีรายการ</div>'; loadMedia(g.gid, list); }
       }
       return '<div class="card tcard"><div class="row"><b class="grow">' + esc(g.name) + ' <span class="muted">(' + Object.keys(g.members || {}).length + ' คน)</span></b>' + (fl ? '<span class="tag st-ok">● แจ้งเสร็จ</span>' : '') + (M.LIST_KINDS.includes(kind) ? '<span class="tag">' + p.n + '/' + p.min + ' รายการ</span>' : (p.done ? '<span class="tag">ครบ</span>' : '<span class="tag st-cancel">ยังไม่ครบ</span>')) + '<span class="big-score sm">' + (e.s != null ? e.s : '–') + '</span></div>' +
@@ -309,7 +325,7 @@
     if (kind === 'reflection') {
       content += ms.map(m => { const p = D.personal[m.sid] || {}; const rf = p.reflection || {}; return '<div class="card"><div class="row">' + avatar(m.name) + '<b class="grow">' + esc(m.name) + '</b>' + (p.flags && p.flags.t7 ? '<span class="tag st-ok">● ส่งแล้ว</span>' : '') + '</div>' + (M.filled(rf) ? M.renderRecord('reflection', rf, {}, {}) : '<div class="muted">ยังไม่ได้เขียน</div>') + '</div>'; }).join('');
     } else if (F.single) {
-      const doc = (gd.docs || {})[kind] || {}; content += M.filled(doc) ? '<div class="card">' + M.renderRecord(kind, doc, media, { showBy: true }) + tcBox(V.gid, kind, kind) + '</div>' : '<div class="empty">ยังไม่มีข้อมูล</div>';
+      const doc = (gd.docs || {})[kind] || {}; content += M.filled(doc) ? '<div class="card">' + M.skipHTML(doc) + M.renderRecord(kind, doc, media, { showBy: true }) + tcBox(V.gid, kind, kind) + '</div>' : '<div class="empty">ยังไม่มีข้อมูล</div>';
       if (kind === 'report') content += '<div class="card"><div class="card-title">📑 รายงานวิชาการอัตโนมัติ</div><div class="row wrap" style="margin-bottom:10px"><button class="btn gold" data-act="gacdocx">⬇ Word (.docx)</button><button class="btn" data-act="gacpdf">⬇ PDF</button><button class="btn sec" data-act="gacprev">👁 ดูตัวอย่าง</button></div><div class="card-title">📒 สมุดบันทึกกลุ่ม</div><button class="btn" data-act="gpdf">⬇ รายงานกลุ่ม PDF</button> <button class="btn sec" data-act="gpreview">👁 ดูตัวอย่าง</button> <button class="btn sec" data-act="gposter">🎨 โปสเตอร์</button></div>';
     } else {
       const all = M.listOf(gd, kind, true), list = all.filter(r => !r.deleted), del = all.filter(r => r.deleted);
@@ -335,8 +351,8 @@
       t.criteria.map(c => rubricRow(c, e.r || {}, 'data-grub')).join('') +
       '<div class="row"><div class="f grow"><label>คะแนนกลุ่ม (แก้เองได้)</label><input type="number" step="0.5" id="g_s" value="' + (e.s != null ? e.s : '') + '"></div></div><div class="f"><label>ความเห็นถึงกลุ่ม</label><textarea id="g_c" rows="2">' + esc(e.c || '') + '</textarea></div></div>' +
       '<div class="card"><div class="card-title">⚖️ ปรับคะแนนรายคน (งานนี้)</div><div class="hint" style="margin-bottom:6px">คะแนนจริง = คะแนนกลุ่ม ± ปรับ (ไม่เกินคะแนนเต็ม) ใช้ข้อมูลการมีส่วนร่วมและการประเมินจากเพื่อนประกอบ</div>' +
-      '<table class="mini"><tr><th>สมาชิก</th><th>มีส่วนร่วม</th><th>เพื่อนประเมิน</th><th>ปรับ ±</th><th>ได้</th></tr>' + ms.map(m => { const sg = (D.grades.students || {})[m.sid] || {}; const adj = (sg.adj || {})[t.id]; const f = finalOf(m.sid).tasks[t.id];
-        return '<tr><td>' + esc(short(m.name)) + '<div class="rolechips">' + m.roles.map(r => (roleById(r) || {}).icon || '').join(' ') + '</div></td><td><div class="bar" style="width:70px;display:inline-block;vertical-align:middle"><i style="width:' + (shareOf(m.sid) || 0) + '%"></i></div> ' + (shareOf(m.sid) || 0) + '%</td><td>' + (peerAvg(m.sid) == null ? '-' : peerAvg(m.sid)) + '</td><td><input type="number" step="0.5" class="adj" data-sid="' + m.sid + '" value="' + (adj != null ? adj : '') + '" placeholder="0" style="width:70px;min-height:34px;padding:4px"></td><td><b>' + (f == null ? '–' : f) + '</b></td></tr>'; }).join('') + '</table></div>';
+      '<div class="scroll-x"><table class="mini"><tr><th>สมาชิก</th><th>มีส่วนร่วม</th><th>เพื่อนประเมิน</th><th>ลงพื้นที่</th><th>ปรับ ±</th><th>ได้</th></tr>' + ms.map(m => { const sg = (D.grades.students || {})[m.sid] || {}; const adj = (sg.adj || {})[t.id]; const FO = finalOf(m.sid), f = FO.tasks[t.id], fw = FO.fw; const fwc = '<td>' + (fw.total ? (fw.total - fw.deny) + '/' + fw.total + (fw.deny ? ' <span class="cs-chip cs-deny" title="ผู้ปกครองไม่อนุญาต ' + fw.deny + ' ครั้ง">❌' + fw.deny + '</span>' + (FIELD.includes(t.id) ? '<div style="font-size:.74rem">' + (fw.exempt ? 'ไม่หัก (งานทดแทน)' : 'หัก ' + fw.pct + '%') + '</div>' : '') + '<label style="font-size:.72rem;display:block;white-space:nowrap"><input type="checkbox" class="nopen" data-sid="' + m.sid + '"' + (fw.exempt ? ' checked' : '') + '> ทำงานทดแทนแล้ว</label>' : '') : '-') + '</td>';
+        return '<tr><td>' + esc(short(m.name)) + '<div class="rolechips">' + m.roles.map(r => (roleById(r) || {}).icon || '').join(' ') + '</div></td><td><div class="bar" style="width:70px;display:inline-block;vertical-align:middle"><i style="width:' + (shareOf(m.sid) || 0) + '%"></i></div> ' + (shareOf(m.sid) || 0) + '%</td><td>' + (peerAvg(m.sid) == null ? '-' : peerAvg(m.sid)) + '</td>' + fwc + '<td><input type="number" step="0.5" class="adj" data-sid="' + m.sid + '" value="' + (adj != null ? adj : '') + '" placeholder="0" style="width:70px;min-height:34px;padding:4px"></td><td><b>' + (f == null ? '–' : f) + '</b></td></tr>'; }).join('') + '</table></div>' + (FIELD.includes(t.id) ? '<div class="hint" style="margin-top:6px">งานภาคสนาม: ผู้ที่ผู้ปกครองไม่อนุญาตให้ลงพื้นที่ จะถูกคิดคะแนนงานนี้ตามสัดส่วน (หัก ' + (C.consentPenalty || 0) + '% × สัดส่วนครั้งที่ไม่ได้ไป) — ติ๊ก “ทำงานทดแทนแล้ว” เพื่อไม่หัก หรือปรับ % ได้ที่ ⚙ คะแนนเต็ม</div>' : '') + '</div>';
   }
   function synthModal() {
     const g = D.groups[V.gid], gd = D.gdata[V.gid] || {}, ms = memList(g), sy = M.synth(gd, ms);
@@ -366,19 +382,19 @@
   function viewScores() {
     const stu = rosterOf(V.room);
     const rows = stu.map(s => { const f = finalOf(s.sid); const g = D.groups[D.memberOf[s.sid]]; const rel = ((D.grades.students || {})[s.sid] || {}).released;
-      return '<tr><td>' + esc(s.no) + '</td><td class="l">' + esc(s.sid) + '</td><td class="l">' + esc(s.name) + '</td><td class="l muted">' + esc(g ? g.name : '-') + '</td>' + C.tasks.map(t => '<td>' + (f.tasks[t.id] == null ? '<span class="muted">–</span>' : f.tasks[t.id]) + '</td>').join('') + '<td><b>' + (f.total == null ? '–' : f.total) + '</b></td><td>' + (rel ? '👁' : '') + '</td></tr>'; }).join('');
+      return '<tr><td>' + esc(s.no) + '</td><td class="l">' + esc(s.sid) + '</td><td class="l">' + esc(s.name) + '</td><td class="l muted">' + esc(g ? g.name : '-') + '</td>' + C.tasks.map(t => '<td>' + (f.tasks[t.id] == null ? '<span class="muted">–</span>' : f.tasks[t.id]) + '</td>').join('') + '<td><b>' + (f.total == null ? '–' : f.total) + '</b></td><td>' + (f.fw.total ? (f.fw.total - f.fw.deny) + '/' + f.fw.total + (f.fw.deny ? ' ❌' : '') : '-') + '</td><td>' + (rel ? '👁' : '') + '</td></tr>'; }).join('');
     return shell('<div class="toolbar"><div class="f"><label>ห้อง</label>' + roomSel('v_room') + '</div><div class="f"><label>ปรับรวมเป็นเต็ม</label><input type="number" id="ex_scale" value="' + totalMax() + '" style="width:110px"></div><label class="chk" style="margin:0"><input type="checkbox" id="ex_only"><span>เฉพาะคะแนนรวม</span></label><div class="grow"></div><button class="btn sec" data-act="settings">⚙ คะแนนเต็ม</button></div>' +
-      '<div class="card"><div class="tbl-box"><table class="t"><tr><th>เลขที่</th><th class="l">รหัส</th><th class="l">ชื่อ-นามสกุล</th><th class="l">กลุ่ม</th>' + C.tasks.map(t => '<th>' + t.icon + ' ' + esc(t.name.split(' ')[0]) + '<br>/' + maxOf(t) + '</th>').join('') + '<th>รวม<br>/' + totalMax() + '</th><th>เผยแพร่</th></tr>' + rows + '</table></div>' +
+      '<div class="card"><div class="tbl-box"><table class="t"><tr><th>เลขที่</th><th class="l">รหัส</th><th class="l">ชื่อ-นามสกุล</th><th class="l">กลุ่ม</th>' + C.tasks.map(t => '<th>' + t.icon + ' ' + esc(t.name.split(' ')[0]) + '<br>/' + maxOf(t) + '</th>').join('') + '<th>รวม<br>/' + totalMax() + '</th><th>ลงพื้นที่</th><th>เผยแพร่</th></tr>' + rows + '</table></div>' +
       '<div class="row wrap" style="margin-top:12px"><button class="btn gold" data-act="exp" data-k="csv">⬇ CSV (Excel/Teacher OS)</button><button class="btn sec" data-act="exp" data-k="xlsx">⬇ Excel .xlsx</button><button class="btn sec" data-act="exp" data-k="copy">📋 คัดลอกตาราง</button><div class="grow"></div><button class="btn sm sec" data-act="release" data-v="1">👁 เผยแพร่คะแนนห้องนี้</button><button class="btn sm ghost" data-act="release" data-v="0">🙈 ซ่อน</button></div>' +
       '<div class="hint" style="margin-top:6px">คะแนนงานกลุ่ม = คะแนนกลุ่ม ± ปรับรายคน · ไฟล์มี เลขที่ รหัส ชื่อ คะแนนรายชิ้น และรวม เพื่อจับคู่กับ Teacher OS ด้วยรหัสนักเรียน</div></div>');
   }
   function exportAoa(opts) {
     const scale = +opts.scale || totalMax(), only = opts.only; const head = ['เลขที่', 'รหัสนักเรียน', 'ชื่อ-นามสกุล', 'ห้อง', 'กลุ่ม'];
     if (!only) C.tasks.forEach(t => head.push(t.name + ' (' + maxOf(t) + ')'));
-    head.push('รวม (' + totalMax() + ')'); if (scale !== totalMax()) head.push('รวมปรับเป็น (' + scale + ')');
+    head.push('รวม (' + totalMax() + ')'); if (scale !== totalMax()) head.push('รวมปรับเป็น (' + scale + ')'); head.push('ลงพื้นที่ (ร่วม/ทั้งหมด)', 'หมายเหตุ');
     const out = [head];
     rosterOf(V.room).forEach(s => { const f = finalOf(s.sid); const g = D.groups[D.memberOf[s.sid]]; const row = [s.no, s.sid, s.name, 'ม.' + s.room, g ? g.name : ''];
-      if (!only) C.tasks.forEach(t => row.push(f.tasks[t.id] == null ? '' : f.tasks[t.id])); row.push(f.total == null ? '' : f.total); if (scale !== totalMax()) row.push(f.total == null ? '' : round1(f.total * scale / totalMax())); out.push(row); });
+      if (!only) C.tasks.forEach(t => row.push(f.tasks[t.id] == null ? '' : f.tasks[t.id])); row.push(f.total == null ? '' : f.total); if (scale !== totalMax()) row.push(f.total == null ? '' : round1(f.total * scale / totalMax())); row.push(f.fw.total ? (f.fw.total - f.fw.deny) + '/' + f.fw.total : '', f.fw.deny ? 'ผู้ปกครองไม่อนุญาตลงพื้นที่ ' + f.fw.deny + ' ครั้ง' + (f.fw.exempt ? ' (ทำงานทดแทนแล้ว ไม่หักคะแนน)' : ' (หักคะแนนงานภาคสนาม ' + f.fw.pct + '%)') : ''); out.push(row); });
     return out;
   }
   const csvEsc = v => { v = String(v == null ? '' : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
@@ -395,10 +411,10 @@
     const F = [['school', 'ชื่อโรงเรียน (เต็ม)'], ['department', 'กลุ่มสาระการเรียนรู้'], ['teacher', 'ชื่อ-นามสกุลครูผู้สอน (ใช้ในรายงาน)'], ['teacherPosition', 'ตำแหน่ง (เช่น ครูผู้ช่วย / ครู / ครูผู้สอน)'], ['code', 'รหัสวิชา'], ['name', 'ชื่อวิชา'], ['unit', 'หน่วยการเรียนรู้'], ['year', 'ปีการศึกษา'], ['semester', 'ภาคเรียน'], ['rooms', 'จำนวนห้อง ม.5']];
     const info = '<div class="card gold"><div class="card-title">🏫 ข้อมูลส่วนกลาง</div><div class="muted" style="margin-bottom:8px">ใช้ในปกรายงานวิชาการ รายงานกลุ่ม โปสเตอร์ และหน้าแอปของนักเรียนทุกคน (ใช้ชื่อจริง–นามสกุลจริงสำหรับงานวิชาการ)</div>' +
       '<div class="info-grid">' + F.map(f => '<div class="f"><label>' + esc(f[1]) + '</label><input type="text" data-info="' + f[0] + '" value="' + esc(c[f[0]] == null ? '' : c[f[0]]) + '"></div>').join('') + '</div><button class="btn gold" data-act="saveinfo">บันทึกข้อมูลส่วนกลาง</button></div>';
-    return shell(info + '<div class="card"><div class="card-title">💾 สำรองข้อมูลทั้งระบบ</div><div class="muted" style="margin-bottom:8px">ดาวน์โหลดรายชื่อ กลุ่ม บันทึกทั้งหมด ประวัติการแก้ไข สะท้อนคิด ปฏิทิน และคะแนน เป็นไฟล์ .json (แนะนำทุกสัปดาห์)</div><div class="row wrap"><button class="btn gold" data-act="fullbackup" data-media="0">ดาวน์โหลด (ไม่รวมภาพ/เสียง)</button><button class="btn sec" data-act="fullbackup" data-media="1">ดาวน์โหลด (รวมภาพ/เสียง — ไฟล์ใหญ่)</button></div></div>' +
+    return shell(info + commCard() + '<div class="card"><div class="card-title">💾 สำรองข้อมูลทั้งระบบ</div><div class="muted" style="margin-bottom:8px">ดาวน์โหลดรายชื่อ กลุ่ม บันทึกทั้งหมด ประวัติการแก้ไข สะท้อนคิด ปฏิทิน และคะแนน เป็นไฟล์ .json (แนะนำทุกสัปดาห์)</div><div class="row wrap"><button class="btn gold" data-act="fullbackup" data-media="0">ดาวน์โหลด (ไม่รวมภาพ/เสียง)</button><button class="btn sec" data-act="fullbackup" data-media="1">ดาวน์โหลด (รวมภาพ/เสียง — ไฟล์ใหญ่)</button></div></div>' +
       '<div class="card"><div class="card-title">↩ กู้คืนข้อมูลกลุ่มจากไฟล์</div><div class="muted" style="margin-bottom:8px">ใช้ไฟล์ “สำรองกลุ่ม” หรือ “สำเนา” ที่นักเรียนดาวน์โหลดจากแอป ระบบจะ <b>เพิ่มเฉพาะรายการที่หายไป หรือฉบับในไฟล์ใหม่กว่า</b> ไม่เขียนทับงานล่าสุด</div><input type="file" id="rs_file" accept=".json"></div>' +
       '<div class="card"><div class="card-title">สถานะการส่งข้อมูลของเครื่องนี้</div>รอส่ง ' + STATUS.pending + ' · ส่งไม่สำเร็จ ' + failed.length + (failed.length ? '<div class="warn-box" style="margin-top:6px">' + esc(failed[0].p) + ': ' + esc(failed[0].error) + '</div><button class="btn sm gold" data-act="retry">ลองส่งใหม่</button>' : '') + '</div>' +
-      '<div class="card"><div class="card-title">⚙ คะแนนเต็มแต่ละงาน</div><button class="btn sec" data-act="settings">ตั้งค่าคะแนนเต็ม</button></div>' +
+      '<div class="card"><div class="card-title">⚙ คะแนนเต็มแต่ละงาน & การหักคะแนนเมื่อไม่ได้ลงพื้นที่</div><div class="muted" style="margin-bottom:8px">ตอนนี้: ผู้ปกครองไม่อนุญาต → หักคะแนนงานภาคสนาม ' + (C.consentPenalty || 0) + '% ตามสัดส่วนครั้งที่ไม่ได้ไป</div><button class="btn sec" data-act="settings">ตั้งค่า</button></div>' +
       (B.mode === 'demo' ? '<div class="card"><div class="card-title">🧪 โหมดสาธิต</div><button class="btn bad" data-act="resetdemo">ล้างข้อมูลสาธิตทั้งหมด</button></div>' : ''));
   }
   async function fullBackup(withMedia) {
@@ -422,17 +438,73 @@
       toast('กู้คืน ' + n + ' รายการให้ ' + D.groups[gid].name, 4000);
     } catch (er) { toast('กู้คืนไม่สำเร็จ: ' + er.message, 4500); }
   }
+  /* ---------- กลุ่มวัฒนธรรม/ชาติพันธุ์ (ครูเพิ่ม แก้ไข ซ่อน/ลบ → แสดงในแอปนักเรียนทันที) ---------- */
+  function commUse(id) { let n = 0; Object.values(D.records || {}).forEach(g => Object.values(g || {}).forEach(k => Object.values(k || {}).forEach(r => { if (r && !r.deleted && r.community === id) n++; }))); Object.values(D.calendar || {}).forEach(e => { if (e && e.community === id) n++; }); return n; }
+  function commCard() {
+    const all = C.commAll.filter(c => c.id !== 'other');
+    return '<div class="card"><div class="row"><div class="card-title grow">🌏 กลุ่มวัฒนธรรม / ชาติพันธุ์</div><button class="btn sm gold" data-act="cmadd">＋ เพิ่มกลุ่ม</button></div><div class="muted" style="margin-bottom:6px">รายการนี้คือตัวเลือก “ชุมชน/กลุ่มวัฒนธรรม” ในแอปนักเรียน (แบบบันทึก ปฏิทิน แผนที่ รายงาน) — เพิ่ม แก้ไข หรือนำออกได้ นักเรียนเห็นทันที (ตัวเลือก “อื่น ๆ (ระบุเอง)” ยังมีให้เสมอ)</div>' +
+      all.map(c => { const n = commUse(c.id); return '<div class="cm-row' + (c.hidden ? ' off' : '') + '"><div class="sw" style="background:' + esc(c.color) + '">' + esc(c.emoji) + '</div><div><b>' + esc(c.name) + '</b> ' + (c.added ? '<span class="tag gold">ครูเพิ่ม</span>' : '') + (c.hidden ? ' <span class="tag st-cancel">นำออกจากตัวเลือกแล้ว</span>' : '') + '<div class="muted" style="font-size:.8rem">' + esc((c.instruments || []).slice(0, 5).join(', ') || 'ยังไม่ระบุเครื่องดนตรี') + (n ? ' · ใช้อยู่ ' + n + ' รายการ' : '') + '</div></div><div class="row" style="gap:6px"><button class="btn xs sec" data-act="cmedit" data-id="' + esc(c.id) + '">✎ แก้ไข</button>' + (c.hidden ? '<button class="btn xs gold" data-act="cmshow" data-id="' + esc(c.id) + '">↩ นำกลับ</button>' : '<button class="btn xs bad" data-act="cmdel" data-id="' + esc(c.id) + '">นำออก</button>') + '</div></div>'; }).join('') + '</div>';
+  }
+  function commModal(id) {
+    const c = id ? C.commAll.find(x => x.id === id) : { emoji: '🎶', color: '#0e7490', name: '', instruments: [], occasions: [] }; if (!c) return;
+    const w = modal('<h3>' + (id ? '✎ แก้ไขกลุ่มวัฒนธรรม' : '＋ เพิ่มกลุ่มวัฒนธรรม/ชาติพันธุ์') + '</h3><div class="cm-grid"><div class="f"><label>สัญลักษณ์</label><input type="text" id="cm_e" value="' + esc(c.emoji) + '" maxlength="4"></div><div class="f"><label>ชื่อกลุ่ม <span class="req">*</span></label><input type="text" id="cm_n" value="' + esc(c.name) + '" placeholder="เช่น มอญ, ลาหู่ (มูเซอ), พม่า" list="cm_sug"><datalist id="cm_sug">' + (C.otherSuggestions || []).map(x => '<option value="' + esc(x) + '">').join('') + '</datalist></div><div class="f"><label>สีประจำกลุ่ม</label><input type="color" id="cm_c" value="' + esc(/^#[0-9a-f]{6}$/i.test(c.color) ? c.color : '#7e5a9b') + '" style="width:100%;height:46px;border:1.5px solid var(--line);border-radius:12px;padding:4px;background:#fff"></div></div>' +
+      '<div class="f"><label>เครื่องดนตรี/การขับร้องที่พบบ่อย (คั่นด้วยจุลภาค) — ใช้เป็นตัวช่วยพิมพ์ของนักเรียน</label><textarea id="cm_i" rows="2" placeholder="เช่น ตะโพนมอญ, ปี่มอญ, ฆ้องมอญ">' + esc((c.instruments || []).join(', ')) + '</textarea></div>' +
+      '<div class="f"><label>โอกาส/พิธีกรรมที่ใช้ดนตรี (คั่นด้วยจุลภาค)</label><textarea id="cm_o" rows="2" placeholder="เช่น งานบุญ, งานศพ, สงกรานต์">' + esc((c.occasions || []).join(', ')) + '</textarea></div>' +
+      '<div class="row"><button class="btn gold grow" id="cm_ok">บันทึก</button><button class="btn sec" data-close>ยกเลิก</button></div>', { center: true });
+    const sp = s => String(s || '').split(/[,，\n]+/).map(x => x.trim()).filter(Boolean).slice(0, 30);
+    $('#cm_ok', w).onclick = () => {
+      const name = $('#cm_n', w).value.trim(); if (!name) { toast('กรอกชื่อกลุ่ม'); return; }
+      if (C.commAll.some(x => x.id !== id && x.name.trim() === name)) { toast('มีกลุ่มชื่อนี้อยู่แล้ว'); return; }
+      const cid = id || ('c' + B.uid()); const prev = ((D.config || {}).communities || {})[cid] || {};
+      const o = { name, emoji: $('#cm_e', w).value.trim() || '🎶', color: $('#cm_c', w).value, instruments: sp($('#cm_i', w).value), occasions: sp($('#cm_o', w).value), hidden: prev.hidden || null, at: prev.at || Date.now(), updatedAt: Date.now() };
+      D.config = Object.assign({}, D.config, { communities: Object.assign({}, (D.config || {}).communities, { [cid]: o }) }); M.applyInfo(D.config);
+      W(B.set('config/communities/' + cid, o)); w.remove(); toast(id ? 'แก้ไขแล้ว — นักเรียนเห็นค่าใหม่ทันที' : 'เพิ่ม “' + name + '” แล้ว — แสดงในแอปนักเรียนทันที', 3200); render(true);
+    };
+  }
+  function commSet(id, patchObj) { const cur = ((D.config || {}).communities || {})[id] || {}; const o = patchObj === null ? null : Object.assign({}, cur, patchObj, { updatedAt: Date.now() }); const cm = Object.assign({}, (D.config || {}).communities); if (o) cm[id] = o; else delete cm[id]; D.config = Object.assign({}, D.config, { communities: cm }); M.applyInfo(D.config); W(B.set('config/communities/' + id, o)); render(true); }
+
+  /* ---------- ใบอนุญาตผู้ปกครอง (ครู) ---------- */
+  function consentModal(eid) {
+    const e0 = D.calendar[eid]; if (!e0) return; const e = Object.assign({ id: eid }, e0); const st = evStudents(e).sort((a, b) => String(a.room).localeCompare(String(b.room), 'th', { numeric: true }) || (+a.no) - (+b.no));
+    const cOf = sid => ((D.consents || {})[sid] || {})[eid] || null; let a = 0, d = 0; st.forEach(s => { const c = cOf(s.sid); if (c && c.decision === 'allow') a++; else if (c && c.decision === 'deny') d++; });
+    const w = modal('<div class="row"><h3 class="grow" style="margin:0">📝 ใบอนุญาตผู้ปกครอง</h3><button class="btn sm" data-close>ปิด</button></div><div class="muted" style="margin:4px 0 10px">' + esc(e.title) + ' · ' + esc(thDate(e.date, true)) + ' · นักเรียน ' + st.length + ' คน — ✅ อนุญาต ' + a + ' · ❌ ไม่อนุญาต ' + d + ' · ⏳ ยังไม่ตอบ ' + (st.length - a - d) + '</div>' +
+      '<div class="row wrap" style="margin-bottom:10px"><button class="btn sm gold" data-c="pblank">🖨 พิมพ์ใบเปล่า (คนที่ยังไม่ตอบ)</button><button class="btn sm sec" data-c="psigned">🖨 พิมพ์ฉบับที่ลงนามแล้วทั้งหมด</button><button class="btn sm sec" data-c="pdfall">⬇ PDF ทุกคน (หลักฐาน)</button></div>' +
+      (st.length ? '<div class="cs-wrap"><table class="cs-table"><tr><th>เลขที่</th><th>ชื่อ</th><th>กลุ่ม</th><th>ผลการขออนุญาต</th><th>บันทึกจากใบกระดาษ / พิมพ์</th></tr>' + st.map(s => { const c = cOf(s.sid); return '<tr><td>' + esc(s.no) + '</td><td>' + esc(s.name) + '<div class="muted" style="font-size:.74rem">ม.' + esc(s.room) + '</div></td><td>' + esc(s.group) + '</td><td>' + CONSENT.chip(c) + (c && c.decision ? '<div class="muted" style="font-size:.76rem">' + esc(c.parentName || '-') + (c.relation ? ' (' + esc(c.relation) + ')' : '') + (c.phone ? ' ☎ ' + esc(c.phone) : '') + '<br>' + esc(thDateTime(c.at)) + ' · ' + (c.method === 'paper' ? 'ครูบันทึกจากใบกระดาษ' : 'เซ็นในแอป') + (c.reason ? '<br>เหตุผล: ' + esc(c.reason) : '') + (c.hist ? '<br>แก้ไขมาแล้ว ' + Object.keys(c.hist).length + ' ครั้ง' : '') + '</div>' + (c.sign ? '<img src="' + esc(c.sign) + '" alt="ลายเซ็น" style="height:34px;background:#fff;border:1px solid var(--line);border-radius:6px">' : '') : '') + '</td>' +
+        '<td><div class="row wrap" style="gap:4px"><button class="btn xs sec" data-c="allow" data-sid="' + s.sid + '">✅ อนุญาต</button><button class="btn xs sec" data-c="deny" data-sid="' + s.sid + '">❌ ไม่อนุญาต</button><button class="btn xs sec" data-c="print" data-sid="' + s.sid + '">🖨</button>' + (c && c.decision ? '<button class="btn xs ghost" data-c="clear" data-sid="' + s.sid + '" title="ล้างผล">↺</button>' : '') + '</div></td></tr>'; }).join('') + '</table></div>' : '<div class="empty">ยังไม่มีนักเรียนในกลุ่มที่ไปนัดนี้</div>') +
+      '<div class="hint" style="margin-top:8px">เมื่อผู้ปกครอง “ไม่อนุญาต” ระบบบันทึกว่านักเรียนไม่ได้ร่วมลงพื้นที่ครั้งนั้น และคิดคะแนนงานภาคสนามตามสัดส่วน (ตั้ง % ได้ที่ ⚙ ตั้งค่า) — ติ๊ก “ทำงานทดแทนแล้ว” ในหน้าตรวจงานเพื่อไม่หัก</div>', { center: true, wide: true });
+    const item = (s, signed) => ({ ev: e, stu: s, c: signed ? cOf(s.sid) : null });
+    w.addEventListener('click', async ev => {
+      const b = ev.target.closest('[data-c]'); if (!b) return; const k = b.dataset.c, s = st.find(x => x.sid === b.dataset.sid);
+      if (k === 'pblank') { const l = st.filter(x => !(cOf(x.sid) && cOf(x.sid).decision)); if (!l.length) { toast('ทุกคนตอบแล้ว'); return; } w.remove(); CONSENT.printLetters(l.map(x => item(x, false))); return; }
+      if (k === 'psigned') { const l = st.filter(x => cOf(x.sid) && cOf(x.sid).decision); if (!l.length) { toast('ยังไม่มีใบที่ลงนาม'); return; } w.remove(); CONSENT.printLetters(l.map(x => item(x, true))); return; }
+      if (k === 'pdfall') { if (!st.length) return; b.disabled = true; const o = b.textContent; b.textContent = 'กำลังสร้าง…'; try { await CONSENT.pdfLetters(st.map(x => item(x, true)), 'ใบขออนุญาตผู้ปกครอง-' + e.date); } catch (er) { toast('สร้าง PDF ไม่ได้ (ต้องมีอินเทอร์เน็ตครั้งแรก) — ใช้ปุ่มพิมพ์แล้วบันทึกเป็น PDF แทน', 4500); } b.disabled = false; b.textContent = o; return; }
+      if (!s) return;
+      if (k === 'print') { w.remove(); CONSENT.printLetters([item(s, true)]); return; }
+      const path = { ['consents/' + s.sid + '/' + eid]: null, ['groups/' + s.gid + '/fieldwork/' + eid + '/' + s.sid]: null };
+      if (k === 'clear') { if (!confirm('ล้างผลการขออนุญาตของ ' + s.name + '?')) return; D.consents[s.sid] = Object.assign({}, D.consents[s.sid]); delete D.consents[s.sid][eid]; W(B.update('', path)); }
+      else {
+        const ex = cOf(s.sid) || {}; const pn = prompt('บันทึกจากใบกระดาษ: ' + (k === 'allow' ? 'อนุญาต' : 'ไม่อนุญาต') + '\nชื่อผู้ปกครองของ ' + s.name + ' ที่ลงนาม:', ex.parentName || ''); if (pn === null) return;
+        let reason = ''; if (k === 'deny') { reason = prompt('เหตุผลที่ไม่อนุญาต (ไม่บังคับ):', ex.reason || ''); if (reason === null) return; }
+        const rec = { decision: k, parentName: pn.trim(), relation: ex.relation || 'ผู้ปกครอง', phone: ex.phone || '', reason: reason.trim(), at: Date.now(), method: 'paper', studentName: s.name, room: s.room, no: s.no, gid: s.gid, eventTitle: e.title || '', eventDate: e.date || '', by: tMe() };
+        if (ex.decision) rec.hist = Object.assign({}, ex.hist || {}, { [ex.at || Date.now()]: { decision: ex.decision, parentName: ex.parentName || '', reason: ex.reason || '', method: ex.method || 'app' } });
+        D.consents[s.sid] = Object.assign({}, D.consents[s.sid], { [eid]: rec }); path['consents/' + s.sid + '/' + eid] = rec; path['groups/' + s.gid + '/fieldwork/' + eid + '/' + s.sid] = k; W(B.update('', path));
+      }
+      pushFinal([s.sid]); w.remove(); consentModal(eid);
+    });
+  }
   function settingsModal() {
-    const w = modal('<h3>⚙ คะแนนเต็มแต่ละงาน</h3>' + C.tasks.map(t => '<div class="row" style="margin-bottom:8px"><div class="grow">' + t.icon + ' ' + esc(t.name) + ' <span class="tag">' + (t.scope === 'group' ? 'กลุ่ม' : 'รายบุคคล') + '</span></div><input type="number" step="0.5" min="0" data-max="' + t.id + '" value="' + maxOf(t) + '" style="width:90px"></div>').join('') + '<div class="muted">รวม: <b id="mx_tot">' + totalMax() + '</b></div><button class="btn gold block" style="margin-top:12px" id="mx_save">บันทึก</button>', { center: true });
+    const w = modal('<h3>⚙ คะแนนเต็มแต่ละงาน</h3>' + C.tasks.map(t => '<div class="row" style="margin-bottom:8px"><div class="grow">' + t.icon + ' ' + esc(t.name) + ' <span class="tag">' + (t.scope === 'group' ? 'กลุ่ม' : 'รายบุคคล') + '</span></div><input type="number" step="0.5" min="0" data-max="' + t.id + '" value="' + maxOf(t) + '" style="width:90px"></div>').join('') + '<div class="muted">รวม: <b id="mx_tot">' + totalMax() + '</b></div><div class="row" style="margin-top:12px;border-top:1px dashed var(--line);padding-top:12px"><div class="grow">🚫 หักคะแนนงานภาคสนาม (' + FIELD.map(x => taskById(x).name.split(' ')[0]).join(', ') + ') เมื่อผู้ปกครองไม่อนุญาตลงพื้นที่ <span class="muted">% × สัดส่วนครั้งที่ไม่ได้ไป (0 = ไม่หัก)</span></div><input type="number" min="0" max="100" step="5" id="mx_pen" value="' + (C.consentPenalty || 0) + '" style="width:90px"></div><button class="btn gold block" style="margin-top:12px" id="mx_save">บันทึก</button>', { center: true });
     w.addEventListener('input', () => { $('#mx_tot', w).textContent = $$('[data-max]', w).reduce((a, i) => a + (+i.value || 0), 0); });
-    $('#mx_save', w).onclick = () => { const mx = {}; $$('[data-max]', w).forEach(i => mx[i.dataset.max] = +i.value || 0); W(B.set('config/max', mx)); w.remove(); toast('บันทึกแล้ว'); };
+    $('#mx_save', w).onclick = () => { const mx = {}; $$('[data-max]', w).forEach(i => mx[i.dataset.max] = +i.value || 0); W(B.set('config/max', mx)); W(B.set('config/consentPenalty', Math.max(0, Math.min(100, +$('#mx_pen', w).value || 0)))); w.remove(); toast('บันทึกแล้ว'); };
   }
 
   /* ---------- render ---------- */
+  let LASTT = '';
   async function render(keep) {
     if (!USER) return;
     const y = window.scrollY; let html;
     if (V.tab === 'roster') html = viewRoster(); else if (V.tab === 'groups') html = viewGroups(); else if (V.tab === 'cal') html = viewCal(); else if (V.tab === 'grade') html = viewGrade(); else if (V.tab === 'scores') html = viewScores(); else if (V.tab === 'backup') html = await viewBackup(); else if (V.tab === 'map') html = viewMapT(); else if (V.tab === 'listen') html = await viewListenT(); else html = viewDash();
+    if (keep && html === LASTT && $('#root .t-wrap')) return; LASTT = html;
     const act = document.activeElement; const actId = act && act.id; const selS = act && act.selectionStart;
     $('#root').innerHTML = html; window.scrollTo(0, keep ? y : 0); if (V.tab === 'roster') initDrag(); if (V.tab === 'map') EXTRAS.renderMap($('#mapEl'), mapPts()); if (V.tab === 'listen') EXTRAS.bindListen($('#listenRoot'), LISTEN_T);
     if (actId && /^(g_c|i_c|g_s|i_s)$/.test(actId)) { const el = $('#' + actId); if (el) { el.focus(); try { el.setSelectionRange(selS, selS); } catch (er) { /* number input */ } } }
@@ -469,6 +541,7 @@
     else if (t.matches('input.gs')) setGroupGrade('s', null, t.value, t.dataset.gid); else if (t.matches('textarea.gc')) setGroupGrade('c', null, t.value, t.dataset.gid);
     else if (t.matches('input.is')) setIndGrade('s', null, t.value, t.dataset.sid); else if (t.matches('textarea.ic')) setIndGrade('c', null, t.value, t.dataset.sid);
     else if (t.matches('textarea.tc')) { const v = t.value.trim(); W(B.set('tcomments/' + t.dataset.gid + '/' + t.dataset.rid, v ? { text: v, kind: t.dataset.kind, at: Date.now(), by: tMe() } : null)); toast(v ? 'ส่งคอมเมนต์ถึงกลุ่มแล้ว' : 'ลบคอมเมนต์แล้ว'); }
+    else if (t.matches('input.nopen')) { const sid = t.dataset.sid; const sg = D.grades.students[sid] = D.grades.students[sid] || {}; sg.noPenalty = t.checked || null; W(B.set('grades/students/' + sid + '/noPenalty', t.checked ? true : null)); pushFinal([sid]); render(true); }
     else if (t.matches('input.adj')) { const v = t.value === '' ? null : +t.value; W(B.set('grades/students/' + t.dataset.sid + '/adj/' + V.tid, v)); const sg = D.grades.students[t.dataset.sid] = D.grades.students[t.dataset.sid] || {}; sg.adj = Object.assign({}, sg.adj, { [V.tid]: v }); pushFinal([t.dataset.sid]); render(true); }
     else if (t.id === 'rs_file' && t.files[0]) { restoreGroupFile(t.files[0]); t.value = ''; }
   });
@@ -501,7 +574,12 @@
       const sh = free.slice().sort(() => Math.random() - .5); const k = Math.max(1, Math.round(sh.length / size)); const buckets = Array.from({ length: k }, () => []); sh.forEach((s, i) => buckets[i % k].push(s.sid));
       let n = groupsOf(V.room).length; buckets.forEach(b => createGroup('กลุ่ม ' + (++n), b)); toast('จัด ' + k + ' กลุ่มแล้ว (แก้ไขได้)');
     },
-    evnew: () => eventModal(null), evedit: bt => eventModal(bt.dataset.id),
+    evnew: () => eventModal(null), evedit: bt => eventModal(bt.dataset.id), evconsent: bt => consentModal(bt.dataset.id),
+    cmadd: () => commModal(null), cmedit: bt => commModal(bt.dataset.id),
+    cmshow: bt => { commSet(bt.dataset.id, { hidden: null }); toast('นำกลับมาเป็นตัวเลือกแล้ว'); },
+    cmdel: bt => { const id = bt.dataset.id, c = C.commAll.find(x => x.id === id); if (!c) return; const n = commUse(id);
+      if (c.added && !n) { if (!confirm('ลบ “' + c.name + '” ออกถาวร? (ยังไม่มีรายการใดใช้กลุ่มนี้)')) return; commSet(id, null); toast('ลบแล้ว'); return; }
+      if (!confirm('นำ “' + c.name + '” ออกจากตัวเลือกของนักเรียน?' + (n ? '\nมี ' + n + ' รายการใช้อยู่ — ข้อมูลเดิมยังแสดงชื่อนี้ตามปกติ' : '') + '\n(นำกลับมาได้ภายหลัง)')) return; commSet(id, Object.assign({ name: c.name, emoji: c.emoji, color: c.color }, { hidden: true })); toast('นำออกจากตัวเลือกแล้ว'); },
     evapprove: bt => { W(B.update('calendar/' + bt.dataset.id, { status: 'approved', approvedAt: Date.now(), approvedBy: tMe() })); toast('อนุมัติแล้ว'); },
     evics: bt => { const e = Object.assign({ id: bt.dataset.id }, D.calendar[bt.dataset.id]); M.saveBlob(new Blob([M.icsFor(e)], { type: 'text/calendar' }), 'ลงพื้นที่-' + e.date + '.ics'); },
     prevg: () => { const gs = groupsOf(V.room); const i = gs.findIndex(g => g.gid === V.gid); if (gs[i - 1]) { openGroup(gs[i - 1].gid); render(); } },

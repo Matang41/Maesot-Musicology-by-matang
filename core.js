@@ -28,7 +28,17 @@
     if (s < 60) return 'เมื่อสักครู่'; if (s < 3600) return Math.floor(s / 60) + ' นาทีที่แล้ว'; if (s < 86400) return Math.floor(s / 3600) + ' ชม.ที่แล้ว';
     return thDateTime(ts);
   }
-  const comm = id => C.communities.find(c => c.id === id) || null;
+  /* กลุ่มวัฒนธรรม: ค่าเริ่มต้นจาก config.js + ที่ครูเพิ่ม/แก้/ซ่อนในแผงครู (config/communities) */
+  const BASE_COMMS = C.communities.map(c => Object.assign({}, c)); C.commAll = C.communities.slice();
+  const arr = v => Array.isArray(v) ? v.filter(Boolean) : (v && typeof v === 'object' ? Object.values(v).filter(Boolean) : []);
+  function applyComms(cfg) {
+    const ov = (cfg && cfg.communities) || {}; const fix = o => { const x = Object.assign({}, o); if ('instruments' in x) x.instruments = arr(x.instruments); if ('occasions' in x) x.occasions = arr(x.occasions); return x; };
+    const all = BASE_COMMS.filter(c => c.id !== 'other').map(c => Object.assign({}, c, ov[c.id] ? fix(ov[c.id]) : {}, { builtin: true }));
+    Object.keys(ov).filter(id => id !== 'other' && !BASE_COMMS.some(c => c.id === id) && ov[id] && ov[id].name).sort((a, b) => (ov[a].at || 0) - (ov[b].at || 0)).forEach(id => all.push(Object.assign({ id, emoji: '🎶', color: '#7e5a9b', instruments: [], occasions: [] }, fix(ov[id]), { added: true })));
+    const other = BASE_COMMS.find(c => c.id === 'other');
+    C.commAll = all.concat(other ? [other] : []); C.communities = C.commAll.filter(c => !c.hidden);
+  }
+  const comm = id => C.commAll.find(c => c.id === id) || null;
   const commName = id => (comm(id) || {}).name || '';
   /* ชุมชนที่นักเรียนระบุเอง ("อื่น ๆ") → ถือเป็นชุมชนแยกตามชื่อ id = 'other:<ชื่อ>' */
   function commObj(r) {
@@ -205,7 +215,7 @@
     return Object.keys(o).map(k => Object.assign({ id: k }, o[k])).filter(r => withDeleted || !r.deleted).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   }
   function otherNames(G) { const s = new Set(); LIST_KINDS.forEach(k => listOf(G, k).forEach(r => { if (r.community === 'other' && r.communityOther) s.add(String(r.communityOther).trim()); })); return Array.from(s); }
-  function commList(G) { const base = C.communities.filter(c => c.id !== 'other'); const ex = {}; LIST_KINDS.forEach(k => listOf(G, k).forEach(r => { if (r.community === 'other') { const c = commObj(r); ex[c.id] = c; } })); return base.concat(Object.values(ex)); }
+  function commList(G) { const base = C.commAll.filter(c => c.id !== 'other'); const ex = {}; LIST_KINDS.forEach(k => listOf(G, k).forEach(r => { if (r.community === 'other') { const c = commObj(r); ex[c.id] = c; } })); return base.concat(Object.values(ex)); }
   const mAt = v => (v && typeof v === 'object') ? (v.at || 0) : (v || 0);
   const mediaIds = rec => { const m = rec && rec.media; if (!m) return []; if (Array.isArray(m)) return m.filter(Boolean); return Object.keys(m).filter(k => m[k]).sort((a, b) => mAt(m[a]) - mAt(m[b])); };
   /* ประเภทสื่อจากข้อมูลในรายการ (รายการใหม่เก็บ {at,t,by}); รายการเก่าคืนค่า '' = ต้องโหลดไฟล์ก่อนจึงรู้ */
@@ -214,14 +224,39 @@
   function taskProgress(t, G, personal) {
     const docs = (G && G.docs) || {};
     switch (t.kind) {
-      case 'notes': case 'analyses': case 'roles': { const n = listOf(G, t.kind).length; return { n, min: t.min, done: n >= t.min }; }
-      case 'interviews': { const n = listOf(G, 'interviews').filter(r => r.consent).length; return { n, min: t.min, done: n >= t.min }; }
+      case 'notes': case 'analyses': case 'roles': case 'interviews': { const all = listOf(G, t.kind); const n = all.filter(r => checkRecord(t.kind, r).valid).length; return { n, min: t.min, done: n >= t.min, drafts: all.length - n }; }
       case 'conservation': { const c = docs.conservation || {}; const d = !!(c.focus && c.why && c.idea1); return { n: d ? 1 : 0, min: 1, done: d, partial: filled(c) }; }
       case 'report': { const c = docs.report || {}; const d = !!(c.title && c.intro && c.conclusion); return { n: d ? 1 : 0, min: 1, done: d, partial: filled(c) }; }
       case 'reflection': { const c = (personal && personal.reflection) || {}; const d = !!(c.learned && c.mywork); return { n: d ? 1 : 0, min: 1, done: d, partial: filled(c) }; }
     }
     return { n: 0, min: 1, done: false };
   }
+
+  /* ---------- ตรวจความครบถ้วนของข้อมูล ----------
+     req  = ข้อมูลขั้นต่ำ (ช่องที่มี *) — ขาดแล้วรายการเป็น "ร่าง" ยังไม่นับเป็นชิ้นงาน
+     key  = รายละเอียดสำคัญ — ขาดได้ถ้านักเรียน "ยืนยัน" พร้อมเหตุผล (เก็บใน _skip ครูเห็น) */
+  const KEYF = {
+    notes: [['gps', '📍 พิกัด GPS'], ['place', 'สถานที่'], ['observe', 'สิ่งที่เห็น'], ['heard', 'สิ่งที่ได้ยิน'], ['media', 'ภาพหรือเสียงประกอบอย่างน้อย 1 ไฟล์']],
+    interviews: [['sign', 'ลายเซ็นผู้ให้ข้อมูล'], ['date', 'วันที่สัมภาษณ์'], ['place', 'สถานที่'], ['answers', 'คำตอบสัมภาษณ์อย่างน้อย 3 ข้อ']],
+    analyses: [['classify', 'ประเภทเครื่องดนตรี'], ['timbre', 'ลักษณะสีสันเสียง'], ['tempo', 'ความเร็ว'], ['role', 'หน้าที่ในวงหรือพิธี'], ['compare', 'การเปรียบเทียบกับดนตรีที่เคยเรียน']],
+    roles: [['who', 'ผู้เล่น/ผู้ร่วมพิธี'], ['steps', 'ลำดับขั้นตอนของพิธี'], ['funcs', 'หน้าที่ของดนตรี'], ['meaning', 'ความหมาย/ความเชื่อ'], ['peace', 'ดนตรีกับการอยู่ร่วมกัน']],
+    conservation: [['ich', 'ประเภทมรดกวัฒนธรรม (ICH)'], ['threats', 'ปัจจัยเสี่ยง'], ['how1', 'วิธีดำเนินการของข้อเสนอที่ 1'], ['peace', 'ดนตรีกับสันติภาพ']],
+    report: [['synthesis', 'อภิปรายผลจากห้องประมวลผลกลาง']],
+    reflection: [['before', 'ระดับการเปิดใจก่อนลงพื้นที่'], ['after', 'ระดับการเปิดใจหลังลงพื้นที่'], ['surprise', 'สิ่งที่ทำให้ประหลาดใจ'], ['next', 'การนำไปใช้']]
+  };
+  const SKIP_WHY = { gps: ['ไม่มีสัญญาณ GPS/อินเทอร์เน็ต', 'บันทึกย้อนหลังที่โรงเรียน/ที่บ้าน', 'ไม่ได้ลงพื้นที่ (ผู้ปกครองไม่อนุญาต)', 'เจ้าของสถานที่ไม่สะดวกให้ระบุตำแหน่ง'], media: ['ไม่ได้รับอนุญาตให้ถ่ายภาพ/บันทึกเสียง', 'อุปกรณ์ไม่พร้อม', 'ใช้ไฟล์ของเพื่อนในรายการอื่น'], sign: ['ผู้ให้ข้อมูลไม่สะดวกเซ็น (ยินยอมด้วยวาจา)', 'สัมภาษณ์ทางโทรศัพท์/ออนไลน์'], _: ['ยังไม่มีข้อมูลส่วนนี้', 'ไม่เกี่ยวข้องกับสิ่งที่ศึกษา', 'เพื่อนในกลุ่มจะมาเพิ่มภายหลัง'] };
+  const has = v => Array.isArray(v) ? v.length > 0 : (v && typeof v === 'object') ? Object.keys(v).length > 0 : (v != null && v !== '' && v !== false);
+  const plain = s => String(s || '').replace(/^[^\wก-๙(]+/, '').replace(/\s*\(.*?\)/g, '').trim();
+  function checkRecord(kind, rec) {
+    rec = rec || {}; const F = FORMS[kind]; const req = [], key = []; const sk = rec._skip || {};
+    if (!F) return { req, key, open: [], valid: true };
+    F.fields.forEach(f => { if (!f.req || !f.k) return; if (f.showIf && rec.community !== f.showIf) return; if (!has(rec[f.k])) req.push({ k: f.k, label: plain(f.label) }); });
+    (KEYF[kind] || []).forEach(p => { const k = p[0]; let ok;
+      if (k === 'answers') ok = [1, 2, 3, 4, 5, 6, 7, 8].filter(i => has(rec['q' + i])).length >= 3; else if (k === 'media') ok = mediaIds(rec).length > 0; else if (k === 'gps') ok = !!(rec.gps && rec.gps.lat != null); else ok = has(rec[k]);
+      if (!ok) key.push({ k, label: p[1], skipped: sk[k] || null }); });
+    return { req, key, open: key.filter(x => !x.skipped), valid: req.length === 0 };
+  }
+  function skipHTML(rec) { const sk = rec && rec._skip; if (!sk) return ''; const ks = Object.keys(sk).filter(k => sk[k]); if (!ks.length) return ''; return '<div class="skipnote">⚠ ยืนยันว่าไม่มีข้อมูล: ' + ks.map(k => '<b>' + esc(sk[k].label || k) + '</b>' + (sk[k].why ? ' (' + esc(sk[k].why) + ')' : '') + ' <span class="muted">— ' + esc(short((sk[k].by || {}).name)) + '</span>').join(' · ') + '</div>'; }
 
   /* ---------- ประมวลผลกลาง (Synthesis) ---------- */
   const PTS = { create: 3, media: 2, edit: 1, restore: 1, delete: 0 };
@@ -254,7 +289,7 @@
     const c = rec.createdBy || {}, u = rec.updatedBy || {};
     let h = '<div class="meta ' + (cls || '') + '">📝 บันทึกโดย <b>' + esc(c.name || '-') + '</b> · ' + esc(thDateTime(rec.createdAt));
     if (rec.updatedAt && rec.updatedAt - rec.createdAt > 60000) h += ' · แก้ล่าสุด <b>' + esc(u.name || '-') + '</b> ' + esc(thDateTime(rec.updatedAt));
-    return h + '</div>';
+    return h + '</div>' + skipHTML(rec);
   }
   function mediaHTML(rec, media, opts) {
     const ids = mediaIds(rec); if (!ids.length) return ''; const imgs = [], aud = [];
@@ -496,10 +531,29 @@
   const avatar = (name, cls) => '<span class="av ' + (cls || '') + '" title="' + esc(name) + '">' + esc(initials(name)) + '</span>';
   const brandHTML = () => '<div class="brand"><img src="icons/logo-mark-512.png" alt=""><div><b>' + esc(C.appName) + '</b><span>' + esc(C.appFull) + '</span></div></div>';
   const INFO_KEYS = ['school', 'department', 'code', 'name', 'unit', 'teacher', 'teacherPosition', 'year', 'semester', 'rooms'];
-  function applyInfo(cfg) { const inf = cfg && cfg.info; if (!inf) return; INFO_KEYS.forEach(k => { if (inf[k] != null && inf[k] !== '') C.course[k] = k === 'rooms' ? +inf[k] || C.course.rooms : inf[k]; }); }
+  function applyInfo(cfg) { applyComms(cfg); C.consentPenalty = cfg && cfg.consentPenalty != null && cfg.consentPenalty !== '' ? Math.max(0, Math.min(100, +cfg.consentPenalty || 0)) : (C.consentPenaltyDefault == null ? 20 : C.consentPenaltyDefault); const inf = cfg && cfg.info; if (!inf) return; INFO_KEYS.forEach(k => { if (inf[k] != null && inf[k] !== '') C.course[k] = k === 'rooms' ? +inf[k] || C.course.rooms : inf[k]; }); }
   const copyrightHTML = () => '<footer class="copy">' + esc(C.copyright) + '</footer>';
 
-  window.MC = { mediaType,
+  /* ---------- ตรวจขนาดหน้าจอ → html[data-size] ให้ CSS จัดวางให้เหมาะ ---------- */
+  (function () {
+    const de = document.documentElement, ua = navigator.userAgent || '';
+    const ios = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (ios) de.dataset.ios = '1';
+    try { if (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone) de.dataset.standalone = '1'; } catch (e) { /* ignore */ }
+    let lastW = 0, raf = 0;
+    function fit() {
+      const w = Math.round(window.innerWidth || de.clientWidth || 0), h = Math.round(window.innerHeight || 0); if (!w) return;
+      const o = w > h ? 'land' : 'port'; if (de.dataset.orient !== o) de.dataset.orient = o;
+      const short = h < 480 ? '1' : ''; if ((de.dataset.short || '') !== short) { if (short) de.dataset.short = '1'; else delete de.dataset.short; }
+      if (w === lastW) return; lastW = w;   /* ไม่คิดใหม่เมื่อแถบเบราว์เซอร์ iOS หด/ขยาย (สูงเปลี่ยนแต่กว้างเท่าเดิม) */
+      const s = w < 350 ? 'xs' : w < 480 ? 'sm' : w < 768 ? 'md' : w < 1100 ? 'lg' : 'xl'; if (de.dataset.size !== s) de.dataset.size = s;
+    }
+    fit(); const on = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(fit); };
+    window.addEventListener('resize', on); window.addEventListener('orientationchange', () => setTimeout(fit, 250));
+  })();
+  const screenInfo = () => { const de = document.documentElement; return { size: de.dataset.size, orient: de.dataset.orient, w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1, ios: !!de.dataset.ios, standalone: !!de.dataset.standalone }; };
+
+  window.MC = { mediaType, checkRecord, skipHTML, KEYF, SKIP_WHY, has, applyComms, BASE_COMMS, screenInfo,
     C, $, $$, esc, uid, pad, isoDate, today, nowTime, thDate, thDateTime, ago, comm, commName, commObj, commLabel, commById, inComm, commList, otherNames, taskById, roleById, nl2, short, initials, OPT, Q, FORMS, KIND_OF_TASK, LIST_KINDS,
     listOf, mediaIds, filled, taskProgress, synth, metaHTML, mediaHTML, gpsHTML, renderRecord, barsHTML, memberTable,
     EV_STATUS, monthGrid, eventCard, icsFor, buildPages, buildPoster, exportPDF, exportPNGs, exportPoster, printPages, previewPages,
