@@ -1,6 +1,6 @@
 /* ============================================================
    consent.js — ระบบขออนุญาตผู้ปกครองก่อนลงพื้นที่
-   • ผู้ปกครองเซ็นบนมือถือของนักเรียน เลือก "อนุญาต" หรือ "ไม่อนุญาต" ได้
+   • ครูออกลิงก์ใช้ครั้งเดียวรายคน → นักเรียนคัดลอกส่งให้ผู้ปกครอง → ผู้ปกครองเซ็นบนเครื่องของตนเอง เลือก "อนุญาต" หรือ "ไม่อนุญาต" ได้
    • ทุกการตัดสินใจบันทึกพร้อมเวลา ชื่อผู้ปกครอง และประวัติการแก้ไข
    • พิมพ์/บันทึก PDF "หนังสือขออนุญาตผู้ปกครอง" ได้ทั้งฉบับเปล่าและฉบับที่เซ็นแล้ว
    • คำนวณสัดส่วนการลงพื้นที่ เพื่อปรับคะแนนงานภาคสนามอัตโนมัติ
@@ -48,7 +48,7 @@
   const DEC = { allow: ['✅ ผู้ปกครองอนุญาต', 'cs-allow'], deny: ['❌ ผู้ปกครองไม่อนุญาต', 'cs-deny'] };
   function chip(c) { if (!c || !c.decision) return '<span class="cs-chip cs-pend">⏳ ยังไม่ได้ขออนุญาต</span>'; const d = DEC[c.decision]; return '<span class="cs-chip ' + d[1] + '">' + d[0] + '</span>'; }
   const needsConsent = e => e && e.date && e.status !== 'cancelled' && e.status !== 'proposed';
-  const commOf = e => (M.commObj ? M.commObj(e) : M.comm(e.community)) || {};
+  const commOf = e => (M.commObj ? M.commObj(e) : M.comm(e.community)) || (e && e._commName ? { name: e._commName } : {});
 
   /* ---------- เนื้อความหนังสือ ---------- */
   function letterBody(ev, stu) {
@@ -78,52 +78,85 @@
       '<p class="cl-np" style="margin:6px 0">' + box('allow') + ' <b>อนุญาต</b> ให้นักเรียนเข้าร่วมกิจกรรม &nbsp;&nbsp; ' + box('deny') + ' <b>ไม่อนุญาต</b> เนื่องจาก <span class="cl-line" style="min-width:220px">' + esc(signed && c.decision === 'deny' ? (c.reason || '-') : '') + '</span></p>' +
       '<p class="cl-np">เบอร์โทรศัพท์ที่ติดต่อได้ <span class="cl-line">' + esc(signed ? (c.phone || '-') : '') + '</span></p>' +
       '<div class="cl-sig">' + (signed && c.sign ? '<img class="cl-signimg" src="' + c.sign + '" alt="">' : '<br>') + 'ลงชื่อ <span class="cl-line">&nbsp;</span> ผู้ปกครอง<br>(' + (signed ? esc(c.parentName) : '<span class="cl-line">&nbsp;</span>') + ')<br>วันที่ ' + (signed ? esc(thDateTime(c.at)) : '........./........./.........') + '</div>' +
-      '<div class="cl-ref">' + (signed ? 'บันทึกทางอิเล็กทรอนิกส์ผ่านแอป ' + esc(C.appName) + ' เมื่อ ' + esc(thDateTime(c.at)) + (c.method === 'paper' ? ' (ครูบันทึกจากใบกระดาษ)' : ' (ผู้ปกครองเซ็นบนอุปกรณ์ของนักเรียน)') + ' · รหัสอ้างอิง ' + esc(ev.id) + '-' + esc(stu.sid) : 'ฉบับสำหรับพิมพ์ให้ผู้ปกครองลงนาม · รหัสอ้างอิง ' + esc(ev.id) + '-' + esc(stu.sid)) + ' · ' + esc(C.copyright) + '</div>';
+      '<div class="cl-ref">' + (signed ? 'บันทึกทางอิเล็กทรอนิกส์ผ่านแอป ' + esc(C.appName) + ' เมื่อ ' + esc(thDateTime(c.at)) + (c.method === 'paper' ? ' (ครูบันทึกจากใบกระดาษ)' : ' (ผู้ปกครองลงนามผ่านลิงก์บนอุปกรณ์ของผู้ปกครอง)' + (c.verified ? ' · ครูยืนยันแล้ว' : '')) + ' · รหัสอ้างอิง ' + esc(ev.id) + '-' + esc(stu.sid) : 'ฉบับสำหรับพิมพ์ให้ผู้ปกครองลงนาม · รหัสอ้างอิง ' + esc(ev.id) + '-' + esc(stu.sid)) + ' · ' + esc(C.copyright) + '</div>';
     return pg;
   }
   function letters(items) { const root = document.createElement('div'); root.className = 'rp-root'; items.forEach(it => root.appendChild(letterPage(it.ev, it.stu, it.c))); return root; }
   function printLetters(items) { M.printPages(letters(items)); }
   async function pdfLetters(items, name) { return M.exportPDF(letters(items), (name || 'ใบขออนุญาตผู้ปกครอง') + '.pdf'); }
 
-  /* ---------- ฟอร์มให้ผู้ปกครองเซ็น (บนมือถือนักเรียน) ---------- */
-  function formModal(o) {
-    const ev = o.ev, stu = o.stu, ex = o.existing || {}; const L = letterBody(ev, stu);
-    const w = modal('<h3>✍️ ขออนุญาตผู้ปกครอง</h3><div class="muted" style="margin-bottom:8px">ให้ผู้ปกครองอ่านรายละเอียด เลือก อนุญาต/ไม่อนุญาต แล้วเซ็นชื่อบนหน้าจอ</div>' +
-      '<div class="cs-letter"><b>เรียน ผู้ปกครองของ ' + esc(stu.name) + '</b><br>' + esc(L.intro) + '<table class="mini" style="margin:8px 0">' + L.rows.map(r => '<tr><td>' + esc(r[0]) + '</td><td>' + esc(r[1]) + '</td></tr>').join('') + '</table>' + esc(L.close) + '</div>' +
-      '<div class="f"><label>ชื่อ-นามสกุลผู้ปกครอง <span class="req">*</span></label><input type="text" id="cs_name" value="' + esc(ex.parentName || '') + '" autocomplete="name"></div>' +
-      '<div class="row"><div class="f grow"><label>ความเกี่ยวข้อง</label><select id="cs_rel">' + ['บิดา', 'มารดา', 'ผู้ปกครอง', 'ญาติ'].map(x => '<option' + (ex.relation === x ? ' selected' : '') + '>' + x + '</option>').join('') + '</select></div><div class="f grow"><label>เบอร์โทร (ไม่บังคับ)</label><input type="tel" id="cs_phone" value="' + esc(ex.phone || '') + '" inputmode="tel"></div></div>' +
-      '<div class="lab" style="font-weight:600;margin-bottom:6px">ผู้ปกครองขอแจ้งว่า <span class="req">*</span></div><div class="cs-dec"><button type="button" data-dec="allow" class="' + (ex.decision === 'allow' ? 'on' : '') + '">✅ อนุญาต</button><button type="button" data-dec="deny" class="' + (ex.decision === 'deny' ? 'on' : '') + '">❌ ไม่อนุญาต</button></div>' +
-      '<div class="f" id="cs_rw"' + (ex.decision === 'deny' ? '' : ' hidden') + '><label>เหตุผลที่ไม่อนุญาต</label><input type="text" id="cs_reason" value="' + esc(ex.reason || '') + '"></div>' +
-      '<div class="f"><label>ลายเซ็นผู้ปกครอง <span class="req">*</span></label><canvas class="cs-sign" id="cs_sign"></canvas><div class="row" style="margin-top:6px"><button class="btn sec sm" id="cs_clear" type="button">ล้างลายเซ็น</button><span class="hint">เซ็นด้วยนิ้วในกรอบ</span></div></div>' +
-      '<label class="chk" style="margin-bottom:12px"><input type="checkbox" id="cs_ok"><span>ข้าพเจ้าเป็นผู้ปกครองของนักเรียน ได้อ่านรายละเอียดแล้ว และเป็นผู้ลงนามด้วยตนเอง</span></label>' +
-      '<button class="btn gold block" id="cs_save">บันทึกการตัดสินใจของผู้ปกครอง</button><button class="btn sec block" style="margin-top:8px" data-close>ยกเลิก</button>', { center: true });
-    let dec = ex.decision || '', signed = false;
-    const cv = $('#cs_sign', w); const dpr = 2; const W = cv.clientWidth || 320, H = cv.clientHeight || 150; cv.width = W * dpr; cv.height = H * dpr;
-    const g = cv.getContext('2d'); g.scale(dpr, dpr); g.lineWidth = 2.4; g.lineCap = 'round'; g.lineJoin = 'round'; g.strokeStyle = '#111';
-    let dr = false, last = null; const pos = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
-    cv.onpointerdown = e => { dr = true; last = pos(e); cv.setPointerCapture(e.pointerId); e.preventDefault(); };
-    cv.onpointermove = e => { if (!dr) return; const p = pos(e); g.beginPath(); g.moveTo(last[0], last[1]); g.lineTo(p[0], p[1]); g.stroke(); last = p; signed = true; };
-    cv.onpointerup = cv.onpointercancel = () => { dr = false; };
-    if (ex.sign) { const im = new Image(); im.onload = () => { g.drawImage(im, 0, 0, W, H); }; im.src = ex.sign; signed = true; }
-    $('#cs_clear', w).onclick = () => { g.clearRect(0, 0, cv.width, cv.height); signed = false; };
-    w.addEventListener('click', e => { const b = e.target.closest('[data-dec]'); if (!b) return; dec = b.dataset.dec; $$('[data-dec]', w).forEach(x => x.classList.toggle('on', x === b)); $('#cs_rw', w).hidden = dec !== 'deny'; });
-    $('#cs_save', w).onclick = async () => {
-      const name = $('#cs_name', w).value.trim();
-      if (!name) { toast('กรอกชื่อผู้ปกครอง'); return; } if (!dec) { toast('เลือก อนุญาต หรือ ไม่อนุญาต'); return; }
-      if (!signed) { toast('ให้ผู้ปกครองเซ็นชื่อในกรอบ'); return; } if (!$('#cs_ok', w).checked) { toast('ติ๊กยืนยันว่าเป็นผู้ปกครองและลงนามเอง'); return; }
-      const rec = { decision: dec, method: o.method || 'app', parentName: name, relation: $('#cs_rel', w).value, phone: $('#cs_phone', w).value.trim(), reason: dec === 'deny' ? $('#cs_reason', w).value.trim() : '', sign: cv.toDataURL('image/png'), at: Date.now(), studentName: stu.name, room: stu.room, no: stu.no, gid: stu.gid || null, eventTitle: ev.title || '', eventDate: ev.date || '', by: { sid: stu.sid, name: stu.name } };
-      const btn = $('#cs_save', w); btn.disabled = true;
-      try { await o.onSave(rec); w.remove(); toast(dec === 'allow' ? 'บันทึกแล้ว: ผู้ปกครองอนุญาต ✓' : 'บันทึกแล้ว: ผู้ปกครองไม่อนุญาต — ครูจะมอบหมายงานทดแทน', 3500); }
-      catch (er) { btn.disabled = false; toast('บันทึกไม่สำเร็จ: ' + (er.message || er), 4000); }
-    };
+  /* ---------- ลิงก์ใบอนุญาต: ctoken/{token} = รายละเอียดนัด + sign (ผู้ปกครองเขียนได้ครั้งเดียว) + verified (ครู) ---------- */
+  const newToken = () => { const a = new Uint8Array(18); crypto.getRandomValues(a); return Array.from(a).map(x => 'abcdefghijkmnpqrstuvwxyz23456789'[x % 32]).join(''); };
+  const linkOf = t => location.origin + location.pathname.replace(/teacher\.html$/, 'index.html').replace(/index\.html$/, '') + '?c=' + t + (window.B && B.mode === 'demo' ? '&demo=1' : '');
+  const COURSE_KEYS = ['school', 'code', 'name', 'unit', 'teacher', 'teacherPosition'];
+  function tokenData(ev, stu) {
+    const course = {}; COURSE_KEYS.forEach(k => { if (C.course[k] != null) course[k] = C.course[k]; });
+    const o = { eid: ev.id, sid: stu.sid, gid: stu.gid || null, student: stu.name || '', room: stu.room || '', no: stu.no == null ? '' : stu.no, group: stu.group || '', title: ev.title || '', date: ev.date || '', start: ev.start || null, end: ev.end || null, community: ev.community || null, communityOther: ev.communityOther || null, commName: (commOf(ev) || {}).name || null, place: ev.place || null, meet: ev.meet || null, note: ev.note || null, teacherJoin: !!ev.teacherJoin, course };
+    return JSON.parse(JSON.stringify(o));
   }
+  /* แปลงข้อมูลลิงก์ → รูปแบบที่หนังสือ/การคิดคะแนนใช้ */
+  function rec(ct) { const s = ct && ct.sign; if (!s) return null; return { decision: s.allow ? 'allow' : 'deny', parentName: s.name || '', relation: s.relation || '', phone: s.phone || '', reason: s.reason || '', sign: s.sig || '', at: s.at, method: s.paper ? 'paper' : 'link', verified: ct.verified || null }; }
+  function fromToken(ct, blank) { return { ev: { id: ct.eid, title: ct.title, date: ct.date, start: ct.start, end: ct.end, community: ct.community, communityOther: ct.communityOther, _commName: ct.commName, place: ct.place, meet: ct.meet, note: ct.note, teacherJoin: ct.teacherJoin }, stu: { sid: ct.sid, name: ct.student, room: ct.room, no: ct.no, group: ct.group, gid: ct.gid }, c: blank ? null : rec(ct) }; }
+  function status(t, ct) {
+    if (!t) return ['⏳ ครูยังไม่ได้ออกลิงก์', 'cs-pend']; if (ct === undefined || ct === null) return ['กำลังโหลด…', 'cs-pend']; if (ct === false) return ['ลิงก์ถูกยกเลิก', 'cs-pend'];
+    const s = ct.sign; if (!s) return ['⏳ รอผู้ปกครองตอบ', 'cs-pend'];
+    if (!s.allow) return ['❌ ผู้ปกครองไม่อนุญาต', 'cs-deny'];
+    return [ct.verified ? '✅ อนุญาต · ครูยืนยันแล้ว' : '✅ อนุญาต · รอครูยืนยัน', 'cs-allow'];
+  }
+  const statusChip = (t, ct) => { const s = status(t, ct); return '<span class="cs-chip ' + s[1] + '">' + s[0] + '</span>'; };
+  async function copyLink(t) { const l = linkOf(t); try { await navigator.clipboard.writeText(l); toast('คัดลอกลิงก์แล้ว — วางส่งให้ผู้ปกครองทาง LINE ได้เลย', 3200); } catch (e) { modal('<h3>ลิงก์สำหรับผู้ปกครอง</h3><div class="muted" style="margin-bottom:6px">กดค้างที่ข้อความเพื่อคัดลอก</div><textarea rows="3" readonly style="font-size:14px">' + esc(l) + '</textarea><button class="btn sec block" data-close style="margin-top:12px">ปิด</button>', { center: true }); } }
+  async function shareLink(t, ct) { const l = linkOf(t); if (navigator.share) { try { await navigator.share({ title: 'ใบขออนุญาตผู้ปกครอง', text: 'ขออนุญาตให้ ' + ((ct && ct.student) || 'นักเรียน') + ' ร่วมกิจกรรม “' + ((ct && ct.title) || 'ลงพื้นที่ศึกษาดนตรี') + '” กรุณาเปิดลิงก์เพื่ออ่านรายละเอียดและลงชื่อ', url: l }); return; } catch (e) { if (e && e.name === 'AbortError') return; } } return copyLink(t); }
 
-  /* ---------- สัดส่วนการลงพื้นที่ (ใช้ปรับคะแนน) ---------- */
+  /* ---------- สัดส่วนการลงพื้นที่ (ใช้ปรับคะแนน): mine = { eid: rec } ---------- */
   function participation(events, mine) {
     const evs = events.filter(needsConsent); let allow = 0, deny = 0, pend = 0; mine = mine || {};
     evs.forEach(e => { const c = mine[e.id]; if (c && c.decision === 'allow') allow++; else if (c && c.decision === 'deny') deny++; else pend++; });
     return { total: evs.length, allow, deny, pend, ratio: evs.length ? (evs.length - deny) / evs.length : 1 };
   }
 
-  window.CONSENT = { chip, letterBody, letterPage, letters, printLetters, pdfLetters, formModal, participation, needsConsent, DEC };
+  /* ============ หน้าสาธารณะสำหรับผู้ปกครอง (index.html?c=token) — ไม่ต้องล็อกอิน เซ็นบนเครื่องผู้ปกครอง ส่งได้ครั้งเดียว ============ */
+  async function publicPage() {
+    let t = null; try { t = new URLSearchParams(location.search).get('c'); } catch (e) { /* ignore */ } if (!t) return false;
+    const root = $('#root');
+    const page = h => { root.innerHTML = '<div class="hero small"><div class="logos"><img class="big" src="icons/logo-full.png" alt=""></div><h1>ใบขออนุญาตผู้ปกครอง</h1><p>' + esc(C.course.school) + '</p></div><div class="card login-card" style="max-width:560px">' + h + '</div>' + M.copyrightHTML(); window.scrollTo(0, 0); };
+    if (!/^[a-z0-9]{12,40}$/.test(t)) { page('<h3>ลิงก์ไม่ถูกต้อง</h3><p class="muted">กรุณาขอลิงก์ใหม่จากนักเรียนหรือครูผู้สอน</p>'); return true; }
+    page('<div class="empty">กำลังโหลด…</div>');
+    try { await B.init(); } catch (e) { page('<h3>เชื่อมต่อระบบไม่สำเร็จ</h3><p class="muted">ตรวจอินเทอร์เน็ตแล้วเปิดลิงก์ใหม่อีกครั้ง</p>'); return true; }
+    let ct = null; try { ct = await Promise.race([B.get('ctoken/' + t), new Promise((_, rj) => setTimeout(() => rj(new Error('timeout')), 15000))]); } catch (e) { page('<h3>โหลดข้อมูลไม่สำเร็จ</h3><p class="muted">สัญญาณอินเทอร์เน็ตอาจช้า กรุณาเปิดลิงก์ใหม่อีกครั้ง</p><button class="btn gold block" onclick="location.reload()">↻ ลองใหม่</button>'); return true; }
+    if (!ct) { page('<h3>ไม่พบใบขออนุญาตนี้</h3><p class="muted">ลิงก์อาจไม่ถูกต้อง หรือครูออกลิงก์ใหม่แทนแล้ว กรุณาขอลิงก์ล่าสุดจากนักเรียนหรือครูผู้สอน</p>'); return true; }
+    if (ct.course) COURSE_KEYS.forEach(k => { if (ct.course[k]) C.course[k] = ct.course[k]; });
+    const it = fromToken(ct), L = letterBody(it.ev, it.stu);
+    const letter = '<div class="cs-letter" style="max-height:none"><b>เรียน ผู้ปกครองของ ' + esc(ct.student) + '</b><br>' + esc(L.intro) + '<table class="mini" style="margin:8px 0">' + L.rows.map(r => '<tr><td>' + esc(r[0]) + '</td><td>' + esc(r[1]) + '</td></tr>').join('') + '</table>' + esc(L.close) + '</div>';
+    const done = () => { const c = rec(ct); page(letter + '<div class="' + (c.decision === 'allow' ? 'tip' : 'warn-box') + '"><b>' + (c.decision === 'allow' ? '✅ บันทึกแล้ว: ผู้ปกครองอนุญาต' : '❌ บันทึกแล้ว: ผู้ปกครองไม่อนุญาต') + '</b><br>ลงชื่อโดย ' + esc(c.parentName) + (c.relation ? ' (' + esc(c.relation) + ')' : '') + ' · ' + esc(thDateTime(c.at)) + (c.reason ? '<br>เหตุผล: ' + esc(c.reason) : '') + (c.sign ? '<br><img src="' + esc(c.sign) + '" alt="ลายเซ็น" style="height:60px;background:#fff;border:1px solid var(--line);border-radius:8px;margin-top:6px">' : '') + '</div><p class="muted">ขอบคุณครับ ปิดหน้านี้ได้เลย คำตอบส่งถึงครูผู้สอนแล้วและแก้ไขเองไม่ได้ หากต้องการเปลี่ยนคำตอบ กรุณาติดต่อครูผู้สอน (' + esc(C.course.teacher) + ') เพื่อออกลิงก์ใหม่</p>'); };
+    if (ct.sign) { done(); return true; }
+    page(letter + '<form id="pf" novalidate><div class="f"><label>ชื่อ-นามสกุลผู้ปกครอง <span class="req">*</span></label><input type="text" id="cs_name" autocomplete="name"></div>' +
+      '<div class="row wrap"><div class="f grow"><label>เกี่ยวข้องเป็น</label><select id="cs_rel">' + ['บิดา', 'มารดา', 'ผู้ปกครอง', 'ปู่ / ย่า / ตา / ยาย', 'ญาติ'].map(x => '<option>' + x + '</option>').join('') + '</select></div><div class="f grow"><label>เบอร์โทรที่ติดต่อได้ <span class="req">*</span></label><input type="tel" id="cs_phone" inputmode="tel" autocomplete="tel"></div></div>' +
+      '<div class="lab" style="font-weight:600;margin-bottom:6px">ข้าพเจ้าขอแจ้งว่า <span class="req">*</span></div><div class="cs-dec"><button type="button" data-dec="allow">✅ อนุญาต</button><button type="button" data-dec="deny">❌ ไม่อนุญาต</button></div>' +
+      '<div class="f" id="cs_rw" hidden><label>เหตุผลที่ไม่อนุญาต (ไม่บังคับ)</label><input type="text" id="cs_reason"></div>' +
+      '<div class="f"><label>ลายมือชื่อผู้ปกครอง <span class="req">*</span> (ใช้นิ้วเซ็นในกรอบ)</label><canvas class="cs-sign" id="cs_sign" width="640" height="300"></canvas><div class="row" style="margin-top:6px"><button class="btn sec sm" id="cs_clear" type="button">ล้างลายเซ็น</button></div></div>' +
+      '<label class="chk" style="margin-bottom:12px"><input type="checkbox" id="cs_ok"><span>ข้าพเจ้าเป็นผู้ปกครองของนักเรียน ได้อ่านรายละเอียดแล้ว และเป็นผู้ลงนามด้วยตนเอง</span></label>' +
+      '<div class="warn-box" id="cs_err" hidden></div><button class="btn gold block" id="cs_save">ส่งคำตอบถึงครู</button><div class="muted" style="margin-top:8px">ข้อมูลนี้ใช้เป็นหลักฐานการขออนุญาตของรายวิชาเท่านั้น · ส่งแล้วแก้ไขไม่ได้</div></form>');
+    let dec = '', drawn = 0, down = false; const cv = $('#cs_sign'), g = cv.getContext('2d'); g.lineWidth = 3.2; g.lineCap = 'round'; g.lineJoin = 'round'; g.strokeStyle = '#111';
+    const pos = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * cv.width / r.width, (e.clientY - r.top) * cv.height / r.height]; };
+    cv.addEventListener('pointerdown', e => { e.preventDefault(); down = true; try { cv.setPointerCapture(e.pointerId); } catch (er) { /* ignore */ } const p = pos(e); g.beginPath(); g.moveTo(p[0], p[1]); });
+    cv.addEventListener('pointermove', e => { if (!down) return; e.preventDefault(); const p = pos(e); g.lineTo(p[0], p[1]); g.stroke(); drawn++; });
+    ['pointerup', 'pointercancel'].forEach(k => cv.addEventListener(k, () => { down = false; }));
+    $('#cs_clear').onclick = () => { g.clearRect(0, 0, cv.width, cv.height); drawn = 0; };
+    root.addEventListener('click', e => { const b = e.target.closest('[data-dec]'); if (!b) return; dec = b.dataset.dec; $$('[data-dec]', root).forEach(x => x.classList.toggle('on', x === b)); $('#cs_rw').hidden = dec !== 'deny'; });
+    $('#pf').addEventListener('submit', async e => {
+      e.preventDefault(); const er = $('#cs_err'), err = x => { er.textContent = x; er.hidden = false; er.scrollIntoView({ block: 'center' }); };
+      const name = $('#cs_name').value.trim(), phone = $('#cs_phone').value.trim();
+      if (name.length < 4) return err('กรอกชื่อ-นามสกุลผู้ปกครอง'); if (!/^[0-9+\- ]{9,15}$/.test(phone)) return err('กรอกเบอร์โทรให้ถูกต้อง (ตัวเลข 9–15 หลัก)'); if (!dec) return err('เลือก อนุญาต หรือ ไม่อนุญาต'); if (drawn < 6) return err('กรุณาเซ็นชื่อในกรอบ'); if (!$('#cs_ok').checked) return err('ติ๊กยืนยันว่าเป็นผู้ปกครองและลงนามด้วยตนเอง');
+      const s = { name, relation: $('#cs_rel').value, phone, allow: dec === 'allow', reason: dec === 'deny' ? $('#cs_reason').value.trim().slice(0, 300) : '', sig: cv.toDataURL('image/png'), at: Date.now() };
+      const btn = $('#cs_save'); btn.disabled = true; btn.textContent = 'กำลังส่ง…'; er.hidden = true;
+      try {
+        const now = await B.get('ctoken/' + t); if (!now) throw new Error('ลิงก์นี้ถูกยกเลิกแล้ว กรุณาขอลิงก์ใหม่'); if (now.sign) { ct = now; done(); return; }
+        await Promise.race([B.set('ctoken/' + t + '/sign', s), new Promise((_, rj) => setTimeout(() => rj(new Error('ส่งไม่สำเร็จ — ตรวจอินเทอร์เน็ตแล้วกดส่งอีกครั้ง')), 20000))]);
+        ct.sign = s; done();
+      } catch (ex) { btn.disabled = false; btn.textContent = 'ส่งคำตอบถึงครู'; err((ex && (ex.message || ex.code)) || 'ส่งไม่สำเร็จ ลองใหม่อีกครั้ง'); }
+    });
+    return true;
+  }
+
+  window.CONSENT = { chip, statusChip, status, letterBody, letterPage, letters, printLetters, pdfLetters, participation, needsConsent, DEC, newToken, linkOf, tokenData, rec, fromToken, copyLink, shareLink, publicPage };
 })();

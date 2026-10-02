@@ -137,10 +137,18 @@
       ".read": "(auth != null && auth.token.email_verified == true && auth.token.email == 'ntpwm2541@gmail.com')",
       ".write": "(auth != null && auth.token.email_verified == true && auth.token.email == 'ntpwm2541@gmail.com')",
       "$sid": {
-        ".read": "((auth != null && auth.token.email_verified == true && auth.token.email.endsWith('@sappha.ac.th')) && auth.token.email == $sid + '@sappha.ac.th')",
-        "$eid": {
-          ".write": "((auth != null && auth.token.email_verified == true && auth.token.email.endsWith('@sappha.ac.th')) && auth.token.email == $sid + '@sappha.ac.th') && newData.exists()",
-          ".validate": "newData.hasChildren(['decision', 'parentName', 'at']) && (newData.child('decision').val() === 'allow' || newData.child('decision').val() === 'deny') && (!newData.child('sign').exists() || newData.child('sign').val().length < 400000)"
+        ".read": "((auth != null && auth.token.email_verified == true && auth.token.email.endsWith('@sappha.ac.th')) && auth.token.email == $sid + '@sappha.ac.th')"
+      }
+    },
+    "ctoken": {
+      ".read": "(auth != null && auth.token.email_verified == true && auth.token.email == 'ntpwm2541@gmail.com')",
+      ".write": "(auth != null && auth.token.email_verified == true && auth.token.email == 'ntpwm2541@gmail.com')",
+      "$t": {
+        ".read": true,
+        ".validate": "$t.matches(/^[a-z0-9]{12,40}$/)",
+        "sign": {
+          ".write": "!data.exists() && newData.exists()",
+          ".validate": "newData.hasChildren(['name', 'allow', 'at']) && newData.child('name').isString() && newData.child('name').val().length < 120 && newData.child('allow').isBoolean() && (!newData.child('sig').exists() || newData.child('sig').val().length < 200000) && (!newData.child('reason').exists() || newData.child('reason').val().length < 400)"
         }
       }
     }

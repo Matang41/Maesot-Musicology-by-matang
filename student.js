@@ -13,7 +13,7 @@
   const MEDIA = {}; let subs = [], gsubs = [];
   const CAL = { y: new Date().getFullYear(), m: new Date().getMonth(), sel: today() };
   let STATUS = { online: true, pending: 0, failed: 0 };
-  function blankD() { return { roster: null, group: null, records: {}, docs: {}, history: {}, personal: {}, calendar: {}, config: {}, consents: {}, gGrade: null, sGrade: null, tc: {}, ready: false }; }
+  function blankD() { return { roster: null, group: null, records: {}, docs: {}, history: {}, personal: {}, calendar: {}, config: {}, consents: {}, ct: {}, gGrade: null, sGrade: null, tc: {}, ready: false }; }
   const me = () => ({ sid: ME.sid, name: ME.name });
   const G = () => ({ records: D.records || {}, docs: D.docs || {}, history: D.history || {} });
   const W = p => Promise.resolve(p).catch(e => { toast('บันทึกขึ้นเซิร์ฟเวอร์ไม่สำเร็จ: ' + ((e && (e.code || e.message)) || e) + ' (ข้อมูลยังอยู่ในเครื่อง)', 4500); });
@@ -56,7 +56,7 @@
 
   let rT = null;
   function onData() {
-    if (!D.ready) return;
+    if (!D.ready) return; mirrorFw();
     cancelAnimationFrame(rT); rT = requestAnimationFrame(() => {
       if (CUR && $('[data-form]')) syncForm(); else if (['listen', 'map'].includes(route().a)) setBadge(); else render(true);
     });
@@ -68,7 +68,7 @@
 
   /* ---------- auth flow ---------- */
   async function onAuth(u) {
-    clearSubs(); D = blankD(); USER = u; ME = null; GID = null; CUR = null;
+    clearSubs(); Object.keys(CTW).forEach(k => delete CTW[k]); D = blankD(); USER = u; ME = null; GID = null; CUR = null;
     if (!u) { renderLogin(); return; }
     if (B.isTeacher(u.email)) { teacherEntry(u); return; }
     const sid = B.sidFromEmail(u.email);
@@ -85,7 +85,7 @@
       first('personal/' + sid, v => { D.personal = v || {}; }),
       first('calendar', v => { D.calendar = v || {}; }),
       first('config', v => { D.config = v || {}; M.applyInfo(D.config); }, () => { }),
-      first('consents/' + sid, v => { D.consents = v || {}; }, () => { }),
+      first('consents/' + sid, v => { D.consents = v || {}; watchTokens(); }, () => { }),
       first('grades/students/' + sid, v => { D.sGrade = v; }, () => { })
     ]);
     D.ready = true; render();
@@ -123,7 +123,7 @@
     await Promise.all([first('calendar', v => { D.calendar = v || {}; }, () => { }), first('config', v => { D.config = v || {}; M.applyInfo(D.config); }, () => { })]);
     subGroup(gid); D.ready = true; if (route().a === 'hub') location.hash = '#/home'; render();
   }
-  const WRITE_ACTS = ['consent', 'done', 'new', 'delrec', 'restore', 'delmedia', 'gps', 'clearsign', 'assign', 'flag', 'roles', 'propose', 'pick', 'rec'];
+  const WRITE_ACTS = ['done', 'new', 'delrec', 'restore', 'delmedia', 'gps', 'clearsign', 'assign', 'flag', 'roles', 'propose', 'pick', 'rec'];
 
   /* ---------- คอมเมนต์ครู + การแจ้งเตือน ---------- */
   function tcHTML(rid) { const c = D.tc && D.tc[rid]; return c ? '<div class="tcomment"><b>💬 ครูคอมเมนต์</b> <span class="muted">· ' + esc(thDateTime(c.at)) + '</span><div style="margin-top:4px">' + nl2(c.text) + '</div></div>' : ''; }
@@ -611,22 +611,16 @@
     new: bt => { const mine = (members().find(m => m.sid === ME.sid) || {}).roles || []; if (!mine.length) { toast('เลือกบทบาทของคุณในกลุ่มก่อน แล้วระบบจะเปิดแบบบันทึกให้ทันที', 3200); rolesModal(() => newRecord(bt.dataset.kind)); return; } newRecord(bt.dataset.kind); },
     done: bt => leaveCheck(bt.dataset.to),
     reload: () => location.reload(),
-    consent: bt => {
-      const e = evById(bt.dataset.id); if (!e) return; const ex = myCons(e.id);
-      CONSENT.formModal({ ev: e, stu: stuObj(), existing: ex, onSave: async rec => {
-        if (ex && ex.decision) rec.hist = Object.assign({}, ex.hist || {}, { [ex.at || Date.now()]: { decision: ex.decision, parentName: ex.parentName || '', reason: ex.reason || '', method: ex.method || 'app' } });
-        D.consents = Object.assign({}, D.consents, { [e.id]: rec }); const upd = { ['consents/' + ME.sid + '/' + e.id]: rec }; if (GID) upd['groups/' + GID + '/fieldwork/' + e.id + '/' + ME.sid] = rec.decision;
-        W(B.update('', upd)); setTimeout(() => render(true), 60);
-      } });
-    },
+    clcopy: bt => CONSENT.copyLink(bt.dataset.t),
+    clshare: bt => CONSENT.shareLink(bt.dataset.t, D.ct[bt.dataset.t]),
     cletter: bt => {
-      const e = evById(bt.dataset.id); if (!e) return; const c = myCons(e.id); const signed = !!(c && c.decision);
-      const w = modal('<h3>🖨 หนังสือขออนุญาตผู้ปกครอง</h3><div class="muted" style="margin-bottom:10px">' + esc(e.title) + ' · ' + esc(thDate(e.date, true)) + '<br>' + (signed ? 'ผู้ปกครองลงนามในแอปแล้ว — พิมพ์ฉบับที่มีลายเซ็นเก็บเป็นหลักฐานได้' : 'พิมพ์ฉบับเปล่าให้ผู้ปกครองเซ็นบนกระดาษ แล้วส่งครู หรือให้ผู้ปกครองเซ็นในแอปก็ได้') + '</div>' +
-        (signed ? '<div class="row wrap" style="margin-bottom:8px"><button class="btn gold grow" data-k="sp">🖨 พิมพ์ฉบับที่เซ็นแล้ว</button><button class="btn grow" data-k="sd">⬇ PDF ฉบับที่เซ็นแล้ว</button></div>' : '') +
+      const t = bt.dataset.t, ct = D.ct[t]; if (!ct) { toast('ยังโหลดข้อมูลใบอนุญาตไม่เสร็จ ลองใหม่อีกครั้ง'); return; } const signed = !!ct.sign;
+      const w = modal('<h3>🖨 หนังสือขออนุญาตผู้ปกครอง</h3><div class="muted" style="margin-bottom:10px">' + esc(ct.title) + ' · ' + esc(thDate(ct.date, true)) + '<br>' + (signed ? 'ผู้ปกครองตอบแล้ว — พิมพ์ฉบับที่มีลายเซ็นเก็บเป็นหลักฐานได้' : 'ถ้าผู้ปกครองไม่สะดวกเปิดลิงก์ พิมพ์ฉบับเปล่าให้เซ็นบนกระดาษแล้วส่งครูได้') + '</div>' +
+        (signed ? '<div class="row wrap" style="margin-bottom:8px"><button class="btn gold grow" data-k="sp">🖨 พิมพ์ฉบับที่ลงนามแล้ว</button><button class="btn grow" data-k="sd">⬇ PDF ฉบับที่ลงนามแล้ว</button></div>' : '') +
         '<div class="row wrap"><button class="btn sec grow" data-k="bp">🖨 พิมพ์ฉบับเปล่า</button><button class="btn sec grow" data-k="bd">⬇ PDF ฉบับเปล่า</button></div><div class="muted" id="cl_msg" style="margin-top:8px"></div><button class="btn ghost block" style="margin-top:8px" data-close>ปิด</button>', { center: true });
-      w.addEventListener('click', async ev => { const b = ev.target.closest('[data-k]'); if (!b) return; const k = b.dataset.k; const it = [{ ev: e, stu: stuObj(), c: k[0] === 's' ? c : null }];
+      w.addEventListener('click', async ev => { const b = ev.target.closest('[data-k]'); if (!b) return; const k = b.dataset.k; const it = [CONSENT.fromToken(ct, k[0] !== 's')];
         if (k[1] === 'p') { w.remove(); CONSENT.printLetters(it); return; }
-        b.disabled = true; try { await CONSENT.pdfLetters(it, 'ใบขออนุญาตผู้ปกครอง-' + ME.sid + '-' + e.date); w.remove(); } catch (er) { b.disabled = false; $('#cl_msg', w).textContent = 'สร้าง PDF ไม่สำเร็จ (ต้องมีอินเทอร์เน็ตครั้งแรก) — ใช้ปุ่ม “พิมพ์” แล้วเลือกบันทึกเป็น PDF แทนได้'; } });
+        b.disabled = true; try { await CONSENT.pdfLetters(it, 'ใบขออนุญาตผู้ปกครอง-' + ME.sid + '-' + ct.date); w.remove(); } catch (er) { b.disabled = false; $('#cl_msg', w).textContent = 'สร้าง PDF ไม่สำเร็จ (ต้องมีอินเทอร์เน็ตครั้งแรก) — ใช้ปุ่ม “พิมพ์” แล้วเลือกบันทึกเป็น PDF แทนได้'; } });
     },
     delrec: () => {
       if (!CUR || !confirm('ย้ายรายการนี้ไปถังขยะ? (สมาชิกกู้คืนได้)')) return; const { kind, rid, path } = CUR; const now = Date.now();
@@ -699,17 +693,32 @@
 
   /* ---------- ใบอนุญาตผู้ปกครอง ---------- */
   const evById = id => D.calendar && D.calendar[id] ? Object.assign({ id }, D.calendar[id]) : null;
-  const myCons = eid => (D.consents || {})[eid] || null;
+  /* ลิงก์ใบอนุญาต: consents/{sid}/{eid} = token → ctoken/{token} (ครูออกลิงก์ ผู้ปกครองตอบบนเครื่องของตนเอง) */
+  const CTW = {};
+  const myTok = eid => { const t = (D.consents || {})[eid]; return typeof t === 'string' ? t : ''; };
+  const myCons = eid => { const t = myTok(eid); return t ? CONSENT.rec(D.ct[t]) : null; };
+  function watchTokens() {
+    Object.keys(D.consents || {}).forEach(eid => { const t = myTok(eid); if (!t || CTW[t]) return; CTW[t] = 1;
+      subs.push(B.on('ctoken/' + t, v => { D.ct[t] = v || false; onData(); }, () => { D.ct[t] = false; })); });
+  }
+  /* แจ้งผลของตัวเองให้เพื่อนในกลุ่มเห็น (สรุป ✅/❌ ใต้การ์ดนัด) */
+  function mirrorFw() {
+    if (!ME || ME.teacher || !GID || !D.group) return;
+    Object.keys(D.consents || {}).forEach(eid => { const c = myCons(eid); if (!c) return; const cur = ((D.group.fieldwork || {})[eid] || {})[ME.sid]; if (cur === c.decision || mirrorFw.sent[eid] === c.decision) return; mirrorFw.sent[eid] = c.decision; W(B.set('groups/' + GID + '/fieldwork/' + eid + '/' + ME.sid, c.decision)); });
+  }
+  mirrorFw.sent = {};
   const stuObj = () => ({ sid: ME.sid, name: ME.name, room: ME.room, no: ME.no, gid: GID, group: (D.group || {}).name || '' });
   function consentBar(e) {
     if (!ME || !CONSENT.needsConsent(e)) return '';
     const fw = (D.group && D.group.fieldwork && D.group.fieldwork[e.id]) || {};
     const row = GID ? '<div class="fw-row" style="width:100%">' + members().map(m => { const d = fw[m.sid]; return '<span class="' + (d === 'allow' ? 'a' : d === 'deny' ? 'd' : 'p') + '">' + (d === 'allow' ? '✅' : d === 'deny' ? '❌' : '⏳') + ' ' + esc(short(m.name)) + '</span>'; }).join('') + '</div>' : '';
     if (ME.teacher) return row;
-    const c = myCons(e.id), has = !!(c && c.decision);
-    return '<button class="btn xs ' + (has ? 'sec' : 'gold') + '" data-act="consent" data-id="' + esc(e.id) + '">' + (has ? '✍️ แก้ไขการตัดสินใจของผู้ปกครอง' : '✍️ ให้ผู้ปกครองเซ็นอนุญาต') + '</button><button class="btn xs sec" data-act="cletter" data-id="' + esc(e.id) + '">🖨 ใบขออนุญาต</button>' +
-      '<div style="width:100%">' + CONSENT.chip(c) + (has ? ' <span class="muted" style="font-size:.76rem">' + esc(c.parentName || '') + ' · ' + esc(thDateTime(c.at)) + (c.method === 'paper' ? ' · ครูบันทึกจากใบกระดาษ' : '') + '</span>' : '') +
-      (has && c.decision === 'deny' ? '<div class="skipnote" style="margin-top:4px">ระบบบันทึกว่าคุณ <b>ไม่ได้ร่วมลงพื้นที่ครั้งนี้เพราะผู้ปกครองไม่อนุญาต</b>' + (c.reason ? ' (' + esc(c.reason) + ')' : '') + ' — คะแนนงานภาคสนามจะคิดตามสัดส่วน ช่วยกลุ่มในงานวิเคราะห์ สรุป และรายงานได้เต็มที่ และทำงานทดแทนตามที่ครูมอบหมาย</div>' : '') + '</div>' + row;
+    const t = myTok(e.id), ct = t ? D.ct[t] : null, c = myCons(e.id);
+    if (!t) return '<div style="width:100%">' + CONSENT.statusChip('', null) + ' <span class="muted" style="font-size:.78rem">เมื่อครูออกลิงก์ใบอนุญาตแล้ว ปุ่มคัดลอกลิงก์จะขึ้นตรงนี้</span></div>' + row;
+    return (c ? '' : '<button class="btn xs gold" data-act="clshare" data-t="' + esc(t) + '">📤 ส่งลิงก์ให้ผู้ปกครอง</button><button class="btn xs sec" data-act="clcopy" data-t="' + esc(t) + '">📋 คัดลอกลิงก์</button>') + '<button class="btn xs sec" data-act="cletter" data-t="' + esc(t) + '">🖨 ใบขออนุญาต</button>' +
+      '<div style="width:100%">' + CONSENT.statusChip(t, ct) + (c ? ' <span class="muted" style="font-size:.76rem">' + esc(c.parentName || '') + ' · ' + esc(thDateTime(c.at)) + (c.method === 'paper' ? ' · ครูบันทึกจากใบกระดาษ' : '') + '</span>' : ' <span class="muted" style="font-size:.78rem">ส่งลิงก์ให้ผู้ปกครองเปิดบนโทรศัพท์ของผู้ปกครอง อ่านรายละเอียด แล้วเซ็นชื่อ (ไม่ต้องล็อกอิน)</span>') +
+      (c && c.decision === 'deny' ? '<div class="skipnote" style="margin-top:4px">ระบบบันทึกว่าคุณ <b>ไม่ได้ร่วมลงพื้นที่ครั้งนี้เพราะผู้ปกครองไม่อนุญาต</b>' + (c.reason ? ' (' + esc(c.reason) + ')' : '') + ' — คะแนนงานภาคสนามจะคิดตามสัดส่วน ช่วยกลุ่มในงานวิเคราะห์ สรุป และรายงานได้เต็มที่ และทำงานทดแทนตามที่ครูมอบหมาย</div>' : '') +
+      (c ? '<div class="muted" style="font-size:.74rem;margin-top:2px">คำตอบแก้ไขเองไม่ได้ ถ้าผู้ปกครองเปลี่ยนใจให้แจ้งครูเพื่อออกลิงก์ใหม่</div>' : '') + '</div>' + row;
   }
 
   /* ---------- การมีส่วนร่วม (นับจากประวัติการบันทึกจริง) ---------- */
@@ -724,7 +733,7 @@
     const it = [[mine.roles.length > 0, 'เลือกบทบาทของฉันในกลุ่ม', '<button class="btn xs gold" data-act="roles">เลือก</button>'],
       [claimed, 'รับผิดชอบงานอย่างน้อย 1 ชิ้น (กด “＋ รับงานนี้” ในหน้างาน)', '<a class="btn xs sec" href="#/notes">ไปที่งาน</a>'],
       [myK.size > 0, 'มีชื่อในงานกลุ่ม: เพิ่ม แก้ไข หรือแนบภาพ/เสียงอย่างน้อย 1 ครั้ง<br>' + dots, '']];
-    if (up.length) it.push([!pend.length, 'ผู้ปกครองรับทราบการลงพื้นที่ (อนุญาตหรือไม่อนุญาตก็ได้)', '<a class="btn xs gold" href="#/calendar">ไปเซ็น</a>']);
+    if (up.length) it.push([!pend.length, 'ผู้ปกครองตอบใบอนุญาตลงพื้นที่แล้ว (อนุญาตหรือไม่อนุญาตก็ได้)', '<a class="btn xs gold" href="#/calendar">ส่งลิงก์</a>']);
     it.push([rfOk, 'เขียนสะท้อนคิดของฉัน', '<a class="btn xs sec" href="#/reflection">เขียน</a>']);
     const n = it.filter(x => x[0]).length; const idle = mem.filter(m => !cm[m.sid]);
     return '<div class="card"><div class="card-title">🎯 ภารกิจของฉัน <span class="muted">' + n + '/' + it.length + '</span></div><div class="bar" style="margin-bottom:8px"><i style="width:' + Math.round(n / it.length * 100) + '%"></i></div><ul class="goal">' +
@@ -832,6 +841,7 @@
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
   (function () { try { const q = new URLSearchParams(location.search); if (q.get('as')) { sessionStorage.setItem('mcm5_viewas', q.get('as')); history.replaceState(null, '', location.pathname + '#/home'); } } catch (e) { /* ignore */ } })();
   (async function boot() {
+    if (await CONSENT.publicPage()) return;   /* ลิงก์ใบอนุญาตผู้ปกครอง (?c=…) ไม่ต้องล็อกอิน */
     try { await B.init(); } catch (er) { $('#root').innerHTML = '<div class="card" style="margin:20px">เชื่อมต่อระบบไม่สำเร็จ: ' + esc(er.message) + '<br>ตรวจอินเทอร์เน็ต แล้วลองเปิดใหม่</div>'; return; }
     B.onStatus(s => { STATUS = s; setBadge(); });
     B.onAuth(u => { onAuth(u); });

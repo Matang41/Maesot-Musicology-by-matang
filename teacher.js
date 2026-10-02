@@ -12,7 +12,7 @@
 
   let loginMsg = '';
   let USER = null, STATUS = { online: true, pending: 0, failed: 0 };
-  const D = { consents: {}, roster: {}, groups: {}, memberOf: {}, calendar: {}, grades: { groups: {}, students: {} }, config: {}, records: null, personal: {}, gdata: {} };
+  const D = { consents: {}, ct: {}, roster: {}, groups: {}, memberOf: {}, calendar: {}, grades: { groups: {}, students: {} }, config: {}, records: null, personal: {}, gdata: {} };
   const V = { tab: 'dash', room: '5/1', sel: new Set(), gid: null, tid: 't1', sid: null, cal: { y: new Date().getFullYear(), m: new Date().getMonth(), sel: today() } };
   let subs = [], gsubs = [];
   const MEDIA = {}; const TRIED = new Set();
@@ -29,7 +29,10 @@
   /* นัดลงพื้นที่ของนักเรียนแต่ละคน + สัดส่วนที่ผู้ปกครองไม่อนุญาต → ตัวคูณคะแนนงานภาคสนาม */
   const FIELD = C.fieldTasks || ['t1', 't2'];
   function eventsFor(sid) { const gid = D.memberOf[sid], room = (D.roster[sid] || {}).room; return Object.keys(D.calendar || {}).map(id => Object.assign({ id }, D.calendar[id])).filter(e => { if (!e.date) return false; const gs = e.groups ? Object.keys(e.groups) : []; return gs.length ? !!(gid && gs.includes(gid)) : (!e.room || e.room === room); }); }
-  function fwOf(sid) { const p = CONSENT.participation(eventsFor(sid), (D.consents || {})[sid]); const ex = !!((D.grades.students || {})[sid] || {}).noPenalty; p.exempt = ex; p.pct = (ex || !p.total) ? 0 : round1((C.consentPenalty || 0) * p.deny / p.total); return p; }
+  const tokOf = (sid, eid) => { const t = ((D.consents || {})[sid] || {})[eid]; return typeof t === 'string' ? t : ''; };
+  const cRec = (sid, eid) => { const t = tokOf(sid, eid); return t ? CONSENT.rec(D.ct[t]) : null; };
+  const consMap = sid => { const o = {}; Object.keys((D.consents || {})[sid] || {}).forEach(eid => { const c = cRec(sid, eid); if (c) o[eid] = c; }); return o; };
+  function fwOf(sid) { const p = CONSENT.participation(eventsFor(sid), consMap(sid)); const ex = !!((D.grades.students || {})[sid] || {}).noPenalty; p.exempt = ex; p.pct = (ex || !p.total) ? 0 : round1((C.consentPenalty || 0) * p.deny / p.total); return p; }
   function evStudents(e) { const gs = e.groups ? Object.keys(e.groups).filter(g => D.groups[g]) : []; const gl = gs.length ? gs : groupsOf(e.room).map(g => g.gid); const out = []; gl.forEach(gid => memList(D.groups[gid]).forEach(m => { const r = D.roster[m.sid] || {}; out.push({ sid: m.sid, name: m.name, no: r.no || m.no, room: r.room || D.groups[gid].room, gid, group: D.groups[gid].name }); })); return out; }
   function finalOf(sid) {
     const sg = (D.grades.students || {})[sid] || {}, gid = D.memberOf[sid], gg = ((D.grades.groups || {})[gid] || {}).tasks || {}; const out = {}; let tot = 0, any = false; const fw = fwOf(sid);
@@ -46,19 +49,20 @@
     if (Object.keys(upd).length) W(B.update('', upd));
   }
   /* เมื่อใบอนุญาต/ปฏิทิน/ค่าหักเปลี่ยน → คำนวณคะแนนที่เผยแพร่ไว้ใหม่ให้ตรงเสมอ */
-  const LD = {}; let syncT = null;
+  const LD = {}, SYNCED = {}; let syncT = null;
   function queueSync() { clearTimeout(syncT); syncT = setTimeout(() => {
-    if (!USER || !['roster', 'groups', 'memberOf', 'calendar', 'grades', 'consents', 'config'].every(k => LD[k])) return;
+    if (!USER || !['roster', 'groups', 'memberOf', 'calendar', 'grades', 'consents', 'ctoken', 'config'].every(k => LD[k])) return;
     const diff = Object.keys(D.grades.students || {}).filter(sid => { const sg = D.grades.students[sid] || {}; if (!sg.final) return false; const f = finalOf(sid); return Object.keys(f.tasks).some(k => f.tasks[k] != null && sg.final[k] !== f.tasks[k]); });
     if (diff.length) pushFinal(diff);
+    Object.keys(D.calendar || {}).forEach(eid => { const e = D.calendar[eid]; if (e && e.date >= today() && !SYNCED[eid + (e.updatedAt || '')]) { SYNCED[eid + (e.updatedAt || '')] = 1; syncTokens(eid, null, true); } });
   }, 1500); }
   function rubricScore(t, r) { if (!t.criteria.every(c => r && r[c.k])) return null; return round1(maxOf(t) * t.criteria.reduce((a, c) => a + r[c.k], 0) / (4 * t.criteria.length)); }
 
   /* ---------- subscriptions ---------- */
-  function sub(path, fn) { subs.push(B.on(path, v => { fn(v); LD[path] = 1; schedule(); if (['consents', 'calendar', 'config', 'memberOf'].includes(path)) queueSync(); }, e => toast('อ่านข้อมูลไม่ได้ (' + path + '): ' + (e.code || e.message), 4000))); }
+  function sub(path, fn) { subs.push(B.on(path, v => { fn(v); LD[path] = 1; schedule(); if (['consents', 'ctoken', 'calendar', 'config', 'memberOf'].includes(path)) queueSync(); }, e => toast('อ่านข้อมูลไม่ได้ (' + path + '): ' + (e.code || e.message), 4000))); }
   function startData() {
     sub('roster', v => D.roster = v || {}); sub('groups', v => D.groups = v || {}); sub('memberOf', v => D.memberOf = v || {});
-    sub('calendar', v => D.calendar = v || {}); needRecords(); sub('grades', v => D.grades = Object.assign({ groups: {}, students: {} }, v || {})); sub('config', v => { D.config = v || {}; M.applyInfo(D.config); }); sub('tcomments', v => D.tc = v || {}); sub('consents', v => D.consents = v || {});
+    sub('calendar', v => D.calendar = v || {}); needRecords(); sub('grades', v => D.grades = Object.assign({ groups: {}, students: {} }, v || {})); sub('config', v => { D.config = v || {}; M.applyInfo(D.config); }); sub('tcomments', v => D.tc = v || {}); sub('consents', v => D.consents = v || {}); sub('ctoken', v => D.ct = v || {});
   }
   function needRecords() { if (D.records !== null) return; D.records = {}; sub('records', v => D.records = v || {}); }
   function openGroup(gid) {
@@ -226,7 +230,7 @@
   }
 
   /* ---------- ปฏิทิน ---------- */
-  const evActions = e => (e.status === 'proposed' ? '<button class="btn xs gold" data-act="evapprove" data-id="' + esc(e.id) + '">✓ อนุมัติ</button>' : '') + '<button class="btn xs sec" data-act="evedit" data-id="' + esc(e.id) + '">✎ แก้ไข</button><button class="btn xs sec" data-act="evics" data-id="' + esc(e.id) + '">📲 .ics</button>' + (CONSENT.needsConsent(e) ? (() => { const st = evStudents(e); let a = 0, d = 0; st.forEach(s => { const c = ((D.consents || {})[s.sid] || {})[e.id]; if (c && c.decision === 'allow') a++; else if (c && c.decision === 'deny') d++; }); return '<button class="btn xs gold" data-act="evconsent" data-id="' + esc(e.id) + '">📝 ใบอนุญาตผู้ปกครอง ✅' + a + ' ❌' + d + ' ⏳' + (st.length - a - d) + '</button>'; })() : '');
+  const evActions = e => (e.status === 'proposed' ? '<button class="btn xs gold" data-act="evapprove" data-id="' + esc(e.id) + '">✓ อนุมัติ</button>' : '') + '<button class="btn xs sec" data-act="evedit" data-id="' + esc(e.id) + '">✎ แก้ไข</button><button class="btn xs sec" data-act="evics" data-id="' + esc(e.id) + '">📲 .ics</button>' + (CONSENT.needsConsent(e) ? (() => { const st = evStudents(e); let a = 0, d = 0; st.forEach(s => { const c = cRec(s.sid, e.id); if (c && c.decision === 'allow') a++; else if (c && c.decision === 'deny') d++; }); return '<button class="btn xs gold" data-act="evconsent" data-id="' + esc(e.id) + '">📝 ใบอนุญาตผู้ปกครอง ✅' + a + ' ❌' + d + ' ⏳' + (st.length - a - d) + '</button>'; })() : '');
   function viewCal() {
     const evs = Object.keys(D.calendar).map(id => Object.assign({ id }, D.calendar[id])).sort((a, b) => (a.date + (a.start || '')).localeCompare(b.date + (b.start || '')));
     const day = evs.filter(e => e.date === V.cal.sel), up = evs.filter(e => e.date >= today() && e.status !== 'cancelled');
@@ -248,7 +252,7 @@
       const groups = {}; $$('.schip input:checked', w).forEach(i => groups[i.value] = true);
       const ne = Object.assign({}, e, { title: $('#e_t', w).value, date: $('#e_d', w).value, start: $('#e_s', w).value, end: $('#e_e', w).value, community: $('#e_c', w).value, communityOther: $('#e_c', w).value === 'other' ? $('#e_co', w).value.trim() : null, status: $('#e_st', w).value, place: $('#e_p', w).value, meet: $('#e_m', w).value, teacherJoin: $('#e_tj', w).checked, note: $('#e_n', w).value, groups: Object.keys(groups).length ? groups : null, room: e.room || V.room, updatedAt: Date.now(), updatedBy: tMe() });
       delete ne.id; if (!ne.createdAt) { ne.createdAt = Date.now(); ne.createdBy = tMe(); }
-      W(B.set('calendar/' + (id || B.uid()), ne)); w.remove(); toast('บันทึกนัดแล้ว');
+      const eid2 = id || B.uid(); W(B.set('calendar/' + eid2, ne)); w.remove(); toast('บันทึกนัดแล้ว'); syncTokens(eid2, ne);
     };
     if (id) $('#e_del', w).onclick = () => { if (confirm('ลบนัดนี้?')) { W(B.remove('calendar/' + id)); w.remove(); } };
   }
@@ -266,7 +270,7 @@
     Object.keys(D.calendar || {}).forEach(id => { const e = D.calendar[id]; if (e.status === 'proposed') out.push({ ic: '🗓', t: 'คำขอลงพื้นที่: ' + e.title + ' (' + thDate(e.date) + ')', tab: 'cal', at: e.createdAt }); });
     Object.keys(D.groups || {}).forEach(gid => { const g = D.groups[gid]; const gg = ((D.grades.groups || {})[gid] || {}).tasks || {};
       Object.keys(g.flags || {}).forEach(tid => { const f = g.flags[tid]; if (f && !(gg[tid] && gg[tid].s != null) && taskById(tid)) out.push({ ic: '✋', t: g.name + ' (ม.' + g.room + ') แจ้งว่า “' + taskById(tid).name + '” เสร็จแล้ว — รอตรวจ', gid, tid, at: f.at }); }); });
-    Object.keys(D.consents || {}).forEach(sid => Object.keys(D.consents[sid] || {}).forEach(eid => { const c = D.consents[sid][eid], e = D.calendar[eid]; if (c && e && c.decision === 'deny' && (c.at || 0) > seen && c.method !== 'paper') out.push({ ic: '🚫', t: ((D.roster[sid] || {}).name || sid) + ' — ผู้ปกครองไม่อนุญาตลงพื้นที่ “' + e.title + '”' + (c.reason ? ' (' + c.reason + ')' : ''), tab: 'cal', at: c.at }); }));
+    Object.keys(D.consents || {}).forEach(sid => Object.keys(D.consents[sid] || {}).forEach(eid => { const c = cRec(sid, eid), e = D.calendar[eid]; if (c && e && c.decision === 'deny' && (c.at || 0) > seen && c.method !== 'paper') out.push({ ic: '🚫', t: ((D.roster[sid] || {}).name || sid) + ' — ผู้ปกครองไม่อนุญาตลงพื้นที่ “' + e.title + '”' + (c.reason ? ' (' + c.reason + ')' : ''), tab: 'cal', at: c.at }); }));
     if (D.records) Object.keys(D.records).forEach(gid => { let n = 0, last = 0; Object.values(D.records[gid] || {}).forEach(k => Object.values(k || {}).forEach(r => { if ((r.updatedAt || 0) > seen) { n++; last = Math.max(last, r.updatedAt); } })); if (n && D.groups[gid]) out.push({ ic: '📝', t: D.groups[gid].name + ' (ม.' + D.groups[gid].room + ') บันทึก/แก้ไขใหม่ ' + n + ' รายการ', gid, at: last }); });
     return out.sort((a, b) => (b.at || 0) - (a.at || 0));
   }
@@ -418,7 +422,7 @@
       (B.mode === 'demo' ? '<div class="card"><div class="card-title">🧪 โหมดสาธิต</div><button class="btn bad" data-act="resetdemo">ล้างข้อมูลสาธิตทั้งหมด</button></div>' : ''));
   }
   async function fullBackup(withMedia) {
-    const keys = ['roster', 'groups', 'memberOf', 'records', 'docs', 'history', 'personal', 'calendar', 'grades', 'config', 'consents', 'tcomments']; const out = { app: 'mcm5-full', v: 2, exportedAt: Date.now(), by: USER.email };
+    const keys = ['roster', 'groups', 'memberOf', 'records', 'docs', 'history', 'personal', 'calendar', 'grades', 'config', 'consents', 'ctoken', 'tcomments']; const out = { app: 'mcm5-full', v: 2, exportedAt: Date.now(), by: USER.email };
     for (const k of keys) { try { out[k] = await B.get(k); } catch (er) { out[k] = null; } }
     if (withMedia) { out.media = {}; for (const gid of Object.keys(out.records || {})) { const ids = []; Object.values(out.records[gid] || {}).forEach(kind => Object.values(kind || {}).forEach(r => M.mediaIds(r).forEach(id => ids.push(id)))); out.media[gid] = {}; for (const id of ids) { const m = await B.getMedia(gid, id); if (m) { const o = Object.assign({}, m); delete o.id; out.media[gid][id] = o; } } } }
     M.saveJSON(out, 'สำรองทั้งระบบ-ดนตรีแม่สอด-' + today() + '.json');
@@ -464,32 +468,44 @@
   function commSet(id, patchObj) { const cur = ((D.config || {}).communities || {})[id] || {}; const o = patchObj === null ? null : Object.assign({}, cur, patchObj, { updatedAt: Date.now() }); const cm = Object.assign({}, (D.config || {}).communities); if (o) cm[id] = o; else delete cm[id]; D.config = Object.assign({}, D.config, { communities: cm }); M.applyInfo(D.config); W(B.set('config/communities/' + id, o)); render(true); }
 
   /* ---------- ใบอนุญาตผู้ปกครอง (ครู) ---------- */
+  /* สร้างลิงก์ให้คนที่ยังไม่มี + อัปเดตรายละเอียดนัดในลิงก์ที่ผู้ปกครองยังไม่ตอบ */
+  function syncTokens(eid, evObj, quiet) {
+    const e0 = evObj || D.calendar[eid]; if (!e0) return 0; const e = Object.assign({}, e0, { id: eid }); if (!CONSENT.needsConsent(e)) return 0;
+    const upd = {}; let n = 0;
+    evStudents(e).forEach(s => { const t = tokOf(s.sid, eid), data = CONSENT.tokenData(e, s);
+      if (!t) { const nt = CONSENT.newToken(); data.createdAt = Date.now(); upd['ctoken/' + nt] = data; upd['consents/' + s.sid + '/' + eid] = nt; D.ct[nt] = data; D.consents[s.sid] = Object.assign({}, typeof D.consents[s.sid] === 'object' ? D.consents[s.sid] : {}, { [eid]: nt }); n++; }
+      else { const ct = D.ct[t]; if (ct && !ct.sign) { const ch = Object.keys(data).filter(k => JSON.stringify(data[k]) !== JSON.stringify(ct[k] == null ? null : ct[k]) && !(data[k] == null && ct[k] == null)); ch.forEach(k => { upd['ctoken/' + t + '/' + k] = data[k]; ct[k] = data[k]; }); } } });
+    if (Object.keys(upd).length) W(B.update('', upd)); if (n && !quiet) toast('ออกลิงก์ใบอนุญาตให้นักเรียน ' + n + ' คนแล้ว — ลิงก์ขึ้นในแอปของนักเรียนทันที', 3500); return n;
+  }
   function consentModal(eid) {
-    const e0 = D.calendar[eid]; if (!e0) return; const e = Object.assign({ id: eid }, e0); const st = evStudents(e).sort((a, b) => String(a.room).localeCompare(String(b.room), 'th', { numeric: true }) || (+a.no) - (+b.no));
-    const cOf = sid => ((D.consents || {})[sid] || {})[eid] || null; let a = 0, d = 0; st.forEach(s => { const c = cOf(s.sid); if (c && c.decision === 'allow') a++; else if (c && c.decision === 'deny') d++; });
+    const e0 = D.calendar[eid]; if (!e0) return; const e = Object.assign({ id: eid }, e0); syncTokens(eid, null, true);
+    const st = evStudents(e).sort((a, b) => String(a.room).localeCompare(String(b.room), 'th', { numeric: true }) || (+a.no) - (+b.no));
+    let a = 0, d = 0, nv = 0; st.forEach(s => { const c = cRec(s.sid, eid); if (c && c.decision === 'allow') { a++; if (!c.verified) nv++; } else if (c && c.decision === 'deny') d++; });
     const w = modal('<div class="row"><h3 class="grow" style="margin:0">📝 ใบอนุญาตผู้ปกครอง</h3><button class="btn sm" data-close>ปิด</button></div><div class="muted" style="margin:4px 0 10px">' + esc(e.title) + ' · ' + esc(thDate(e.date, true)) + ' · นักเรียน ' + st.length + ' คน — ✅ อนุญาต ' + a + ' · ❌ ไม่อนุญาต ' + d + ' · ⏳ ยังไม่ตอบ ' + (st.length - a - d) + '</div>' +
-      '<div class="row wrap" style="margin-bottom:10px"><button class="btn sm gold" data-c="pblank">🖨 พิมพ์ใบเปล่า (คนที่ยังไม่ตอบ)</button><button class="btn sm sec" data-c="psigned">🖨 พิมพ์ฉบับที่ลงนามแล้วทั้งหมด</button><button class="btn sm sec" data-c="pdfall">⬇ PDF ทุกคน (หลักฐาน)</button></div>' +
-      (st.length ? '<div class="cs-wrap"><table class="cs-table"><tr><th>เลขที่</th><th>ชื่อ</th><th>กลุ่ม</th><th>ผลการขออนุญาต</th><th>บันทึกจากใบกระดาษ / พิมพ์</th></tr>' + st.map(s => { const c = cOf(s.sid); return '<tr><td>' + esc(s.no) + '</td><td>' + esc(s.name) + '<div class="muted" style="font-size:.74rem">ม.' + esc(s.room) + '</div></td><td>' + esc(s.group) + '</td><td>' + CONSENT.chip(c) + (c && c.decision ? '<div class="muted" style="font-size:.76rem">' + esc(c.parentName || '-') + (c.relation ? ' (' + esc(c.relation) + ')' : '') + (c.phone ? ' ☎ ' + esc(c.phone) : '') + '<br>' + esc(thDateTime(c.at)) + ' · ' + (c.method === 'paper' ? 'ครูบันทึกจากใบกระดาษ' : 'เซ็นในแอป') + (c.reason ? '<br>เหตุผล: ' + esc(c.reason) : '') + (c.hist ? '<br>แก้ไขมาแล้ว ' + Object.keys(c.hist).length + ' ครั้ง' : '') + '</div>' + (c.sign ? '<img src="' + esc(c.sign) + '" alt="ลายเซ็น" style="height:34px;background:#fff;border:1px solid var(--line);border-radius:6px">' : '') : '') + '</td>' +
-        '<td><div class="row wrap" style="gap:4px"><button class="btn xs sec" data-c="allow" data-sid="' + s.sid + '">✅ อนุญาต</button><button class="btn xs sec" data-c="deny" data-sid="' + s.sid + '">❌ ไม่อนุญาต</button><button class="btn xs sec" data-c="print" data-sid="' + s.sid + '">🖨</button>' + (c && c.decision ? '<button class="btn xs ghost" data-c="clear" data-sid="' + s.sid + '" title="ล้างผล">↺</button>' : '') + '</div></td></tr>'; }).join('') + '</table></div>' : '<div class="empty">ยังไม่มีนักเรียนในกลุ่มที่ไปนัดนี้</div>') +
-      '<div class="hint" style="margin-top:8px">เมื่อผู้ปกครอง “ไม่อนุญาต” ระบบบันทึกว่านักเรียนไม่ได้ร่วมลงพื้นที่ครั้งนั้น และคิดคะแนนงานภาคสนามตามสัดส่วน (ตั้ง % ได้ที่ ⚙ ตั้งค่า) — ติ๊ก “ทำงานทดแทนแล้ว” ในหน้าตรวจงานเพื่อไม่หัก</div>', { center: true, wide: true });
-    const item = (s, signed) => ({ ev: e, stu: s, c: signed ? cOf(s.sid) : null });
+      '<div class="tip">ระบบออกลิงก์รายคนให้แล้ว นักเรียนเห็นปุ่ม “ส่งลิงก์ให้ผู้ปกครอง” ในปฏิทินของตนเอง ผู้ปกครองเปิดลิงก์บนโทรศัพท์ของผู้ปกครอง เซ็นชื่อ และส่งได้ครั้งเดียว (ไม่ต้องล็อกอิน)</div>' +
+      '<div class="row wrap" style="margin-bottom:10px">' + (nv ? '<button class="btn sm gold" data-c="verall">✔ ยืนยันที่อนุญาตทั้งหมด (' + nv + ')</button>' : '') + '<button class="btn sm sec" data-c="pblank">🖨 พิมพ์ใบเปล่า (คนที่ยังไม่ตอบ)</button><button class="btn sm sec" data-c="psigned">🖨 พิมพ์ฉบับที่ลงนามแล้ว</button><button class="btn sm sec" data-c="pdfall">⬇ PDF ทุกคน (หลักฐาน)</button></div>' +
+      (st.length ? '<div class="cs-wrap"><table class="cs-table"><tr><th>เลขที่</th><th>ชื่อ</th><th>กลุ่ม</th><th>ผลการขออนุญาต</th><th>จัดการ</th></tr>' + st.map(s => { const t = tokOf(s.sid, eid), ct = t ? D.ct[t] : null, c = CONSENT.rec(ct); return '<tr><td>' + esc(s.no) + '</td><td>' + esc(s.name) + '<div class="muted" style="font-size:.74rem">ม.' + esc(s.room) + '</div></td><td>' + esc(s.group) + '</td><td>' + CONSENT.statusChip(t, t ? (ct || false) : null) + (c ? '<div class="muted" style="font-size:.76rem">' + esc(c.parentName || '-') + (c.relation ? ' (' + esc(c.relation) + ')' : '') + (c.phone ? ' ☎ ' + esc(c.phone) : '') + '<br>' + esc(thDateTime(c.at)) + ' · ' + (c.method === 'paper' ? 'ครูบันทึกจากใบกระดาษ' : 'ลงนามผ่านลิงก์') + (c.reason ? '<br>เหตุผล: ' + esc(c.reason) : '') + '</div>' + (c.sign ? '<img src="' + esc(c.sign) + '" alt="ลายเซ็น" style="height:34px;background:#fff;border:1px solid var(--line);border-radius:6px">' : '') : '') + '</td>' +
+        '<td><div class="row wrap" style="gap:4px">' + (t && !c ? '<button class="btn xs gold" data-c="copy" data-sid="' + s.sid + '">📋 ลิงก์</button><button class="btn xs sec" data-c="allow" data-sid="' + s.sid + '" title="บันทึกจากใบกระดาษ">📄 อนุญาต</button><button class="btn xs sec" data-c="deny" data-sid="' + s.sid + '" title="บันทึกจากใบกระดาษ">📄 ไม่อนุญาต</button>' : '') + (c && c.decision === 'allow' && !c.verified ? '<button class="btn xs gold" data-c="verify" data-sid="' + s.sid + '">✔ ยืนยัน</button>' : '') + '<button class="btn xs sec" data-c="print" data-sid="' + s.sid + '">🖨</button>' + (c ? '<button class="btn xs ghost" data-c="reissue" data-sid="' + s.sid + '" title="ยกเลิกคำตอบเดิมและออกลิงก์ใหม่">↺ ออกลิงก์ใหม่</button>' : '') + '</div></td></tr>'; }).join('') + '</table></div>' : '<div class="empty">ยังไม่มีนักเรียนในกลุ่มที่ไปนัดนี้</div>') +
+      '<div class="hint" style="margin-top:8px">“ยืนยัน” = ครูตรวจแล้วว่าเป็นคำตอบของผู้ปกครองจริง (เช่น โทรสอบถามตามเบอร์ที่ให้ไว้) · เมื่อผู้ปกครอง “ไม่อนุญาต” ระบบคิดคะแนนงานภาคสนามตามสัดส่วน (ตั้ง % ที่ ⚙ ตั้งค่า) · ผู้ปกครองเปลี่ยนใจ → กด “ออกลิงก์ใหม่”</div>', { center: true, wide: true });
+    const item = (s, signed) => { const t = tokOf(s.sid, eid), ct = t && D.ct[t]; return ct ? CONSENT.fromToken(ct, !signed) : { ev: e, stu: s, c: null }; };
+    const again = () => { w.remove(); consentModal(eid); };
     w.addEventListener('click', async ev => {
       const b = ev.target.closest('[data-c]'); if (!b) return; const k = b.dataset.c, s = st.find(x => x.sid === b.dataset.sid);
-      if (k === 'pblank') { const l = st.filter(x => !(cOf(x.sid) && cOf(x.sid).decision)); if (!l.length) { toast('ทุกคนตอบแล้ว'); return; } w.remove(); CONSENT.printLetters(l.map(x => item(x, false))); return; }
-      if (k === 'psigned') { const l = st.filter(x => cOf(x.sid) && cOf(x.sid).decision); if (!l.length) { toast('ยังไม่มีใบที่ลงนาม'); return; } w.remove(); CONSENT.printLetters(l.map(x => item(x, true))); return; }
+      if (k === 'verall') { const upd = {}, v = { by: tMe().name, at: Date.now() }; st.forEach(x => { const t = tokOf(x.sid, eid), c = cRec(x.sid, eid); if (c && c.decision === 'allow' && !c.verified) { upd['ctoken/' + t + '/verified'] = v; D.ct[t].verified = v; } }); W(B.update('', upd)); toast('ยืนยันแล้ว'); again(); return; }
+      if (k === 'pblank') { const l = st.filter(x => !cRec(x.sid, eid)); if (!l.length) { toast('ทุกคนตอบแล้ว'); return; } w.remove(); CONSENT.printLetters(l.map(x => item(x, false))); return; }
+      if (k === 'psigned') { const l = st.filter(x => cRec(x.sid, eid)); if (!l.length) { toast('ยังไม่มีใบที่ลงนาม'); return; } w.remove(); CONSENT.printLetters(l.map(x => item(x, true))); return; }
       if (k === 'pdfall') { if (!st.length) return; b.disabled = true; const o = b.textContent; b.textContent = 'กำลังสร้าง…'; try { await CONSENT.pdfLetters(st.map(x => item(x, true)), 'ใบขออนุญาตผู้ปกครอง-' + e.date); } catch (er) { toast('สร้าง PDF ไม่ได้ (ต้องมีอินเทอร์เน็ตครั้งแรก) — ใช้ปุ่มพิมพ์แล้วบันทึกเป็น PDF แทน', 4500); } b.disabled = false; b.textContent = o; return; }
-      if (!s) return;
+      if (!s) return; const t = tokOf(s.sid, eid), ct = t && D.ct[t];
       if (k === 'print') { w.remove(); CONSENT.printLetters([item(s, true)]); return; }
-      const path = { ['consents/' + s.sid + '/' + eid]: null, ['groups/' + s.gid + '/fieldwork/' + eid + '/' + s.sid]: null };
-      if (k === 'clear') { if (!confirm('ล้างผลการขออนุญาตของ ' + s.name + '?')) return; D.consents[s.sid] = Object.assign({}, D.consents[s.sid]); delete D.consents[s.sid][eid]; W(B.update('', path)); }
-      else {
-        const ex = cOf(s.sid) || {}; const pn = prompt('บันทึกจากใบกระดาษ: ' + (k === 'allow' ? 'อนุญาต' : 'ไม่อนุญาต') + '\nชื่อผู้ปกครองของ ' + s.name + ' ที่ลงนาม:', ex.parentName || ''); if (pn === null) return;
-        let reason = ''; if (k === 'deny') { reason = prompt('เหตุผลที่ไม่อนุญาต (ไม่บังคับ):', ex.reason || ''); if (reason === null) return; }
-        const rec = { decision: k, parentName: pn.trim(), relation: ex.relation || 'ผู้ปกครอง', phone: ex.phone || '', reason: reason.trim(), at: Date.now(), method: 'paper', studentName: s.name, room: s.room, no: s.no, gid: s.gid, eventTitle: e.title || '', eventDate: e.date || '', by: tMe() };
-        if (ex.decision) rec.hist = Object.assign({}, ex.hist || {}, { [ex.at || Date.now()]: { decision: ex.decision, parentName: ex.parentName || '', reason: ex.reason || '', method: ex.method || 'app' } });
-        D.consents[s.sid] = Object.assign({}, D.consents[s.sid], { [eid]: rec }); path['consents/' + s.sid + '/' + eid] = rec; path['groups/' + s.gid + '/fieldwork/' + eid + '/' + s.sid] = k; W(B.update('', path));
+      if (k === 'copy') { CONSENT.copyLink(t); return; }
+      if (k === 'verify') { const v = { by: tMe().name, at: Date.now() }; ct.verified = v; W(B.set('ctoken/' + t + '/verified', v)); again(); return; }
+      if (k === 'reissue') { if (!confirm('ยกเลิกคำตอบเดิมของผู้ปกครอง ' + s.name + ' และออกลิงก์ใหม่?\n(คำตอบและลายเซ็นเดิมจะถูกลบ ลิงก์เดิมใช้ไม่ได้อีก)')) return; delete D.ct[t]; D.consents[s.sid] = Object.assign({}, D.consents[s.sid]); delete D.consents[s.sid][eid]; W(B.update('', { ['ctoken/' + t]: null, ['consents/' + s.sid + '/' + eid]: null, ['groups/' + s.gid + '/fieldwork/' + eid + '/' + s.sid]: null })); syncTokens(eid, null, true); pushFinal([s.sid]); toast('ออกลิงก์ใหม่แล้ว — นักเรียนเห็นลิงก์ใหม่ทันที', 3200); again(); return; }
+      if (k === 'allow' || k === 'deny') {
+        if (!ct) return; const pn = prompt('บันทึกจากใบกระดาษ: ' + (k === 'allow' ? 'อนุญาต' : 'ไม่อนุญาต') + '\nชื่อผู้ปกครองของ ' + s.name + ' ที่ลงนาม:', ''); if (pn === null) return; if (!pn.trim()) { toast('กรอกชื่อผู้ปกครอง'); return; }
+        let reason = ''; if (k === 'deny') { reason = prompt('เหตุผลที่ไม่อนุญาต (ไม่บังคับ):', ''); if (reason === null) return; }
+        const sg = { name: pn.trim(), relation: 'ผู้ปกครอง', allow: k === 'allow', reason: reason.trim(), paper: true, at: Date.now() }, v = { by: tMe().name, at: Date.now() };
+        ct.sign = sg; ct.verified = v; W(B.update('', { ['ctoken/' + t + '/sign']: sg, ['ctoken/' + t + '/verified']: v, ['groups/' + s.gid + '/fieldwork/' + eid + '/' + s.sid]: k })); pushFinal([s.sid]); again();
       }
-      pushFinal([s.sid]); w.remove(); consentModal(eid);
     });
   }
   function settingsModal() {
@@ -580,7 +596,7 @@
     cmdel: bt => { const id = bt.dataset.id, c = C.commAll.find(x => x.id === id); if (!c) return; const n = commUse(id);
       if (c.added && !n) { if (!confirm('ลบ “' + c.name + '” ออกถาวร? (ยังไม่มีรายการใดใช้กลุ่มนี้)')) return; commSet(id, null); toast('ลบแล้ว'); return; }
       if (!confirm('นำ “' + c.name + '” ออกจากตัวเลือกของนักเรียน?' + (n ? '\nมี ' + n + ' รายการใช้อยู่ — ข้อมูลเดิมยังแสดงชื่อนี้ตามปกติ' : '') + '\n(นำกลับมาได้ภายหลัง)')) return; commSet(id, Object.assign({ name: c.name, emoji: c.emoji, color: c.color }, { hidden: true })); toast('นำออกจากตัวเลือกแล้ว'); },
-    evapprove: bt => { W(B.update('calendar/' + bt.dataset.id, { status: 'approved', approvedAt: Date.now(), approvedBy: tMe() })); toast('อนุมัติแล้ว'); },
+    evapprove: bt => { W(B.update('calendar/' + bt.dataset.id, { status: 'approved', approvedAt: Date.now(), approvedBy: tMe() })); toast('อนุมัติแล้ว'); syncTokens(bt.dataset.id, Object.assign({}, D.calendar[bt.dataset.id], { status: 'approved' })); },
     evics: bt => { const e = Object.assign({ id: bt.dataset.id }, D.calendar[bt.dataset.id]); M.saveBlob(new Blob([M.icsFor(e)], { type: 'text/calendar' }), 'ลงพื้นที่-' + e.date + '.ics'); },
     prevg: () => { const gs = groupsOf(V.room); const i = gs.findIndex(g => g.gid === V.gid); if (gs[i - 1]) { openGroup(gs[i - 1].gid); render(); } },
     nextg: () => { const gs = groupsOf(V.room); const i = gs.findIndex(g => g.gid === V.gid); if (gs[i + 1]) { openGroup(gs[i + 1].gid); render(); } else toast('กลุ่มสุดท้ายแล้ว'); },
