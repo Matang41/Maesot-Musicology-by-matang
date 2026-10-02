@@ -418,7 +418,7 @@
       (B.mode === 'demo' ? '<div class="card"><div class="card-title">🧪 โหมดสาธิต</div><button class="btn bad" data-act="resetdemo">ล้างข้อมูลสาธิตทั้งหมด</button></div>' : ''));
   }
   async function fullBackup(withMedia) {
-    const keys = ['roster', 'groups', 'memberOf', 'records', 'docs', 'history', 'personal', 'calendar', 'grades', 'config']; const out = { app: 'mcm5-full', v: 2, exportedAt: Date.now(), by: USER.email };
+    const keys = ['roster', 'groups', 'memberOf', 'records', 'docs', 'history', 'personal', 'calendar', 'grades', 'config', 'consents', 'tcomments']; const out = { app: 'mcm5-full', v: 2, exportedAt: Date.now(), by: USER.email };
     for (const k of keys) { try { out[k] = await B.get(k); } catch (er) { out[k] = null; } }
     if (withMedia) { out.media = {}; for (const gid of Object.keys(out.records || {})) { const ids = []; Object.values(out.records[gid] || {}).forEach(kind => Object.values(kind || {}).forEach(r => M.mediaIds(r).forEach(id => ids.push(id)))); out.media[gid] = {}; for (const id of ids) { const m = await B.getMedia(gid, id); if (m) { const o = Object.assign({}, m); delete o.id; out.media[gid][id] = o; } } } }
     M.saveJSON(out, 'สำรองทั้งระบบ-ดนตรีแม่สอด-' + today() + '.json');
